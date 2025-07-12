@@ -1,0 +1,19 @@
+{
+  "name": "Byt",
+  "description": "Showing various apps on a single screen",
+  "date": "March 5, 2025",
+  "credits": [
+    {
+      "name": "Leo",
+      "role": "Software design and development"
+    },
+    {
+      "name": "Zach",
+      "role": "3D modeling"
+    },
+    {
+      "name": "Dan",
+      "role": "3D modeling"
+    }
+  ]
+}
