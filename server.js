@@ -1,9 +1,26 @@
 import express from "express";
 import fs from "fs";
 import path from "path";
+import cors from "cors";
 
 const app = express();
 const port = 3109;
+
+// CORS configuration
+const corsOptions = {
+  origin: [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:5173",
+    "http://localhost:8080",
+    "https://fcc.lol",
+    "https://www.fcc.lol"
+  ],
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
 
 // Cache for projects data
 let projectsCache = null;
