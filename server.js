@@ -66,6 +66,7 @@ async function fetchProjectsFromRemote() {
         // Fetch media files from the media folder
         const mediaUrl = `${baseUrl}/${projectName}/media/`;
         let media = [];
+        let primaryImage = null; // Initialize primaryImage
 
         try {
           const mediaResponse = await fetch(mediaUrl);
@@ -112,7 +113,7 @@ async function fetchProjectsFromRemote() {
               .map((filename) => `${baseUrl}/${projectName}/media/${filename}`);
 
             // Get the first image as primary image
-            const primaryImage =
+            primaryImage =
               imageFiles.length > 0
                 ? `${baseUrl}/${projectName}/media/${imageFiles.sort()[0]}`
                 : null;
