@@ -75,6 +75,8 @@ async function fetchProjectsFromRemote() {
             // Parse media files from the HTML
             const mediaFileRegex = /<a href="([^"]+)">/g;
             const mediaFiles = [];
+            const imageFiles = [];
+            const videoFiles = [];
             let mediaMatch;
 
             while ((mediaMatch = mediaFileRegex.exec(mediaHtml)) !== null) {
@@ -94,13 +96,29 @@ async function fetchProjectsFromRemote() {
                 ].includes(ext)
               ) {
                 mediaFiles.push(filename);
+
+                // Separate images from videos
+                if ([".jpg", ".jpeg", ".png", ".gif"].includes(ext)) {
+                  imageFiles.push(filename);
+                } else {
+                  videoFiles.push(filename);
+                }
               }
             }
 
             // Sort alphabetically and convert to full URLs
-            media = mediaFiles
+            const allMedia = mediaFiles
               .sort()
               .map((filename) => `${baseUrl}/${projectName}/media/${filename}`);
+
+            // Get the first image as primary image
+            const primaryImage =
+              imageFiles.length > 0
+                ? `${baseUrl}/${projectName}/media/${imageFiles.sort()[0]}`
+                : null;
+
+            // Combine all media
+            media = allMedia;
           }
         } catch (mediaError) {
           console.warn(
@@ -134,7 +152,8 @@ async function fetchProjectsFromRemote() {
           id: projectName,
           ...manifest,
           date: formattedDate || manifest.date, // Use formatted date or fallback to original
-          media
+          media,
+          primaryImage
         };
 
         projects.push(projectWithId);
