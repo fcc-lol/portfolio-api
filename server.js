@@ -257,6 +257,56 @@ app.get("/projects", async (req, res) => {
   }
 });
 
+app.get("/projects/:projectId", async (req, res) => {
+  try {
+    const { projectId } = req.params;
+
+    // Always serve from cache if available
+    if (projectsCache) {
+      console.log(`Serving project ${projectId} from cache`);
+      const project = projectsCache.find((p) => p.id === projectId);
+
+      if (project) {
+        res.json(project);
+      } else {
+        res.status(404).json({ error: "Project not found" });
+      }
+
+      // Always update cache in background
+      updateCacheInBackground();
+    } else {
+      // No cache available - fetch fresh data
+      console.log("No cache available, fetching fresh projects data");
+      const projects = await fetchProjectsFromRemote();
+      projectsCache = projects;
+      lastCacheUpdate = Date.now();
+      saveCacheToFile(); // Save to file after updating
+
+      const project = projects.find((p) => p.id === projectId);
+      if (project) {
+        res.json(project);
+      } else {
+        res.status(404).json({ error: "Project not found" });
+      }
+    }
+  } catch (error) {
+    console.error(`Error reading project ${req.params.projectId}:`, error);
+
+    // If we have cache, serve it as fallback
+    if (projectsCache) {
+      console.log("Serving cache due to error");
+      const project = projectsCache.find((p) => p.id === req.params.projectId);
+      if (project) {
+        res.json(project);
+      } else {
+        res.status(404).json({ error: "Project not found" });
+      }
+    } else {
+      res.status(500).json({ error: "Failed to read project" });
+    }
+  }
+});
+
 // Load cache from file on startup
 loadCacheFromFile();
 
