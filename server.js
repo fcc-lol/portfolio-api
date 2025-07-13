@@ -49,7 +49,12 @@ async function fetchProjectsFromRemote() {
 
   while ((match = linkRegex.exec(html)) !== null) {
     const folderName = match[1].replace("/", ""); // Remove trailing slash
-    if (folderName && folderName !== ".." && folderName !== ".") {
+    if (
+      folderName &&
+      folderName !== ".." &&
+      folderName !== "." &&
+      folderName !== "_template"
+    ) {
       projectFolders.push(folderName);
     }
   }
