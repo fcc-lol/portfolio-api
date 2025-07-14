@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import cors from "cors";
 import imageSize from "image-size";
+import getVideoDimensionsLib from "get-video-dimensions";
 
 const app = express();
 const port = 3109;
@@ -47,6 +48,28 @@ async function getImageDimensions(url) {
     };
   } catch (error) {
     console.warn(`Could not get dimensions for ${url}:`, error.message);
+    return null;
+  }
+}
+
+// Function to get video dimensions from URL
+async function getVideoDimensions(url) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch video: ${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const dimensions = await getVideoDimensionsLib(buffer);
+
+    return {
+      width: dimensions.width,
+      height: dimensions.height
+    };
+  } catch (error) {
+    console.warn(`Could not get video dimensions for ${url}:`, error.message);
     return null;
   }
 }
@@ -153,11 +176,13 @@ async function fetchProjectsFromRemote() {
                   dimensions
                 });
               } else {
-                // This is a video - no dimensions for now
+                // This is a video - get dimensions
+                const dimensions = await getVideoDimensions(url);
                 allMedia.push({
                   url,
                   type: "video",
-                  filename
+                  filename,
+                  dimensions
                 });
               }
             }
