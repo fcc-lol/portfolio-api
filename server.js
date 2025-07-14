@@ -3,7 +3,6 @@ import fs from "fs";
 import path from "path";
 import cors from "cors";
 import imageSize from "image-size";
-import ffprobeStatic from "ffprobe-static";
 import { execFile } from "child_process";
 import { promisify } from "util";
 
@@ -59,14 +58,13 @@ const execFileAsync = promisify(execFile);
 // Function to get video dimensions from URL
 async function getVideoDimensions(url) {
   try {
-    const { stdout } = await execFileAsync(ffprobeStatic.path, [
-      "-v",
-      "quiet",
-      "-print_format",
-      "json",
-      "-show_streams",
-      url
-    ]);
+    const { stdout } = await execFileAsync(
+      "ffprobe",
+      ["-v", "quiet", "-print_format", "json", "-show_streams", url],
+      {
+        timeout: 30000 // 30 second timeout
+      }
+    );
 
     const info = JSON.parse(stdout);
 
