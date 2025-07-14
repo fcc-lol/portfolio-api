@@ -2,6 +2,7 @@ import express from "express";
 import fs from "fs";
 import path from "path";
 import cors from "cors";
+import imageSize from "image-size";
 
 const app = express();
 const port = 3109;
@@ -27,6 +28,28 @@ let projectsCache = null;
 let lastCacheUpdate = null;
 let isUpdatingCache = false;
 const CACHE_FILE = "projects-cache.json";
+
+// Function to get image dimensions from URL
+async function getImageDimensions(url) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image: ${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const dimensions = imageSize(buffer);
+
+    return {
+      width: dimensions.width,
+      height: dimensions.height
+    };
+  } catch (error) {
+    console.warn(`Could not get dimensions for ${url}:`, error.message);
+    return null;
+  }
+}
 
 // Function to fetch projects from remote storage
 async function fetchProjectsFromRemote() {
@@ -112,18 +135,49 @@ async function fetchProjectsFromRemote() {
               }
             }
 
-            // Sort alphabetically and convert to full URLs
-            const allMedia = mediaFiles
-              .sort()
-              .map((filename) => `${baseUrl}/${projectName}/media/${filename}`);
+            // Sort alphabetically and process media files with dimensions
+            const sortedMediaFiles = mediaFiles.sort();
+            const allMedia = [];
 
-            // Get the first image as primary image
-            primaryImage =
-              imageFiles.length > 0
-                ? `${baseUrl}/${projectName}/media/${imageFiles.sort()[0]}`
-                : null;
+            for (const filename of sortedMediaFiles) {
+              const url = `${baseUrl}/${projectName}/media/${filename}`;
+              const ext = path.extname(filename).toLowerCase();
 
-            // Combine all media
+              if ([".jpg", ".jpeg", ".png", ".gif"].includes(ext)) {
+                // This is an image - get dimensions
+                const dimensions = await getImageDimensions(url);
+                allMedia.push({
+                  url,
+                  type: "image",
+                  filename,
+                  dimensions
+                });
+              } else {
+                // This is a video - no dimensions for now
+                allMedia.push({
+                  url,
+                  type: "video",
+                  filename
+                });
+              }
+            }
+
+            // Get the first image as primary image with dimensions
+            if (imageFiles.length > 0) {
+              const firstImageFilename = imageFiles.sort()[0];
+              const primaryImageUrl = `${baseUrl}/${projectName}/media/${firstImageFilename}`;
+              const primaryImageDimensions = await getImageDimensions(
+                primaryImageUrl
+              );
+
+              primaryImage = {
+                url: primaryImageUrl,
+                filename: firstImageFilename,
+                dimensions: primaryImageDimensions
+              };
+            }
+
+            // Set media to the processed array
             media = allMedia;
           }
         } catch (mediaError) {
