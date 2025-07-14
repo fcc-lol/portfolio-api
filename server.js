@@ -3,7 +3,8 @@ import fs from "fs";
 import path from "path";
 import cors from "cors";
 import imageSize from "image-size";
-import getVideoDimensionsLib from "get-video-dimensions";
+import ffprobe from "ffprobe";
+import ffprobeStatic from "ffprobe-static";
 
 const app = express();
 const port = 3109;
@@ -55,19 +56,21 @@ async function getImageDimensions(url) {
 // Function to get video dimensions from URL
 async function getVideoDimensions(url) {
   try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch video: ${response.status}`);
+    const info = await ffprobe(url, { path: ffprobeStatic.path });
+
+    // Find the video stream
+    const videoStream = info.streams.find(
+      (stream) => stream.codec_type === "video"
+    );
+
+    if (videoStream && videoStream.width && videoStream.height) {
+      return {
+        width: videoStream.width,
+        height: videoStream.height
+      };
+    } else {
+      throw new Error("No video stream found or dimensions not available");
     }
-
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const dimensions = await getVideoDimensionsLib(buffer);
-
-    return {
-      width: dimensions.width,
-      height: dimensions.height
-    };
   } catch (error) {
     console.warn(`Could not get video dimensions for ${url}:`, error.message);
     return null;
@@ -263,7 +266,6 @@ function saveCacheToFile() {
       timestamp: new Date().toISOString()
     };
     fs.writeFileSync(CACHE_FILE, JSON.stringify(cacheData, null, 2));
-    console.log("Cache saved to file");
   } catch (error) {
     console.error("Error saving cache to file:", error);
   }
@@ -276,9 +278,6 @@ function loadCacheFromFile() {
       const cacheData = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
       projectsCache = cacheData.projects;
       lastCacheUpdate = cacheData.lastUpdate;
-      console.log(
-        `Cache loaded from file with ${projectsCache?.length || 0} projects`
-      );
       return true;
     }
   } catch (error) {
@@ -295,14 +294,10 @@ async function updateCacheInBackground() {
 
   isUpdatingCache = true;
   try {
-    console.log("Updating projects cache in background...");
     const newProjects = await fetchProjectsFromRemote();
     projectsCache = newProjects;
     lastCacheUpdate = Date.now();
     saveCacheToFile(); // Save to file after updating
-    console.log(
-      `Cache updated successfully with ${newProjects.length} projects`
-    );
   } catch (error) {
     console.error("Error updating cache:", error);
   } finally {
@@ -314,14 +309,12 @@ app.get("/projects", async (req, res) => {
   try {
     // Always serve from cache if available
     if (projectsCache) {
-      console.log("Serving projects from cache");
       res.json(projectsCache);
 
       // Always update cache in background
       updateCacheInBackground();
     } else {
       // No cache available - fetch fresh data
-      console.log("No cache available, fetching fresh projects data");
       const projects = await fetchProjectsFromRemote();
       projectsCache = projects;
       lastCacheUpdate = Date.now();
@@ -333,7 +326,6 @@ app.get("/projects", async (req, res) => {
 
     // If we have cache, serve it as fallback
     if (projectsCache) {
-      console.log("Serving cache due to error");
       res.json(projectsCache);
     } else {
       res.status(500).json({ error: "Failed to read projects" });
@@ -347,7 +339,6 @@ app.get("/projects/:projectId", async (req, res) => {
 
     // Always serve from cache if available
     if (projectsCache) {
-      console.log(`Serving project ${projectId} from cache`);
       const project = projectsCache.find((p) => p.id === projectId);
 
       if (project) {
@@ -360,7 +351,6 @@ app.get("/projects/:projectId", async (req, res) => {
       updateCacheInBackground();
     } else {
       // No cache available - fetch fresh data
-      console.log("No cache available, fetching fresh projects data");
       const projects = await fetchProjectsFromRemote();
       projectsCache = projects;
       lastCacheUpdate = Date.now();
@@ -378,7 +368,6 @@ app.get("/projects/:projectId", async (req, res) => {
 
     // If we have cache, serve it as fallback
     if (projectsCache) {
-      console.log("Serving cache due to error");
       const project = projectsCache.find((p) => p.id === req.params.projectId);
       if (project) {
         res.json(project);
