@@ -92,6 +92,19 @@ async function getVideoDimensions(url) {
   }
 }
 
+// Function to sort projects by date, newest first
+function sortProjectsByDate(projects) {
+  return [...projects].sort((a, b) => {
+    // Handle cases where date might be null or undefined
+    if (!a.date && !b.date) return 0;
+    if (!a.date) return 1; // Projects without dates go to the end
+    if (!b.date) return -1; // Projects without dates go to the end
+    
+    // Compare dates in descending order (newest first)
+    return new Date(b.date) - new Date(a.date);
+  });
+}
+
 // Function to fetch projects from remote storage
 async function fetchProjectsFromRemote() {
   const baseUrl = "https://static.fcc.lol/portfolio-storage";
@@ -324,7 +337,7 @@ app.get("/projects", async (req, res) => {
   try {
     // Always serve from cache if available
     if (projectsCache) {
-      res.json(projectsCache);
+      res.json(sortProjectsByDate(projectsCache));
 
       // Always update cache in background
       updateCacheInBackground();
@@ -334,14 +347,15 @@ app.get("/projects", async (req, res) => {
       projectsCache = projects;
       lastCacheUpdate = Date.now();
       saveCacheToFile(); // Save to file after updating
-      res.json(projects);
+      
+      res.json(sortProjectsByDate(projects));
     }
   } catch (error) {
     console.error("Error reading projects:", error);
 
     // If we have cache, serve it as fallback
     if (projectsCache) {
-      res.json(projectsCache);
+      res.json(sortProjectsByDate(projectsCache));
     } else {
       res.status(500).json({ error: "Failed to read projects" });
     }
