@@ -324,7 +324,18 @@ app.get("/projects", async (req, res) => {
   try {
     // Always serve from cache if available
     if (projectsCache) {
-      res.json(projectsCache);
+      // Sort projects by date, newest first
+      const sortedProjects = [...projectsCache].sort((a, b) => {
+        // Handle cases where date might be null or undefined
+        if (!a.date && !b.date) return 0;
+        if (!a.date) return 1; // Projects without dates go to the end
+        if (!b.date) return -1; // Projects without dates go to the end
+        
+        // Compare dates in descending order (newest first)
+        return new Date(b.date) - new Date(a.date);
+      });
+      
+      res.json(sortedProjects);
 
       // Always update cache in background
       updateCacheInBackground();
@@ -334,14 +345,37 @@ app.get("/projects", async (req, res) => {
       projectsCache = projects;
       lastCacheUpdate = Date.now();
       saveCacheToFile(); // Save to file after updating
-      res.json(projects);
+      
+      // Sort projects by date, newest first
+      const sortedProjects = [...projects].sort((a, b) => {
+        // Handle cases where date might be null or undefined
+        if (!a.date && !b.date) return 0;
+        if (!a.date) return 1; // Projects without dates go to the end
+        if (!b.date) return -1; // Projects without dates go to the end
+        
+        // Compare dates in descending order (newest first)
+        return new Date(b.date) - new Date(a.date);
+      });
+      
+      res.json(sortedProjects);
     }
   } catch (error) {
     console.error("Error reading projects:", error);
 
     // If we have cache, serve it as fallback
     if (projectsCache) {
-      res.json(projectsCache);
+      // Sort projects by date, newest first even in fallback
+      const sortedProjects = [...projectsCache].sort((a, b) => {
+        // Handle cases where date might be null or undefined
+        if (!a.date && !b.date) return 0;
+        if (!a.date) return 1; // Projects without dates go to the end
+        if (!b.date) return -1; // Projects without dates go to the end
+        
+        // Compare dates in descending order (newest first)
+        return new Date(b.date) - new Date(a.date);
+      });
+      
+      res.json(sortedProjects);
     } else {
       res.status(500).json({ error: "Failed to read projects" });
     }
