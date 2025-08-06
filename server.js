@@ -110,13 +110,9 @@ function generatePageHtml(project, projectId) {
         window.location.href = '${baseUrl}/${projectId}';
       }, 1000);
     </script>
-    
-    <link
-      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700;800&family=DM+Serif+Display&family=DM+Mono:wght@400;500&display=swap"
-      rel="stylesheet" />
   </head>
   <body>
-    <div style="text-align: center; padding: 2rem; font-family: 'DM Sans', sans-serif;">
+    <div style="text-align: center; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif">
       <h1>${escapeHtml(title)}</h1>
       <p>${escapeHtml(description)}</p>
       <p style="color: #666;">Loading your project...</p>
