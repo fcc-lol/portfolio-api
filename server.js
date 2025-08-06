@@ -92,7 +92,7 @@ function generatePageHtml(project, projectId) {
     <meta property="og:description" content="${escapeHtml(description)}" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="${projectUrl}" />
-    <meta property="og:site_name" content="F" />
+    <meta property="og:site_name" content="FCC Studio" />
     <meta property="og:image" content="${shareImageUrl}" />
     <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
