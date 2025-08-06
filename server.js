@@ -55,7 +55,80 @@ async function getImageDimensions(url) {
 
 const execFileAsync = promisify(execFile);
 
-// Function to get video dimensions from URL
+// Helper function to escape HTML for safe insertion into meta tags
+function escapeHtml(text) {
+  if (!text) return "";
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Helper function to generate HTML with Open Graph tags
+function generatePageHtml(project, projectId) {
+  const baseUrl = "https://fcc.lol";
+  const apiUrl = `https://portfolio-api.fcc.lol`;
+
+  const title = project.title || project.name || "Untitled Project";
+  const description = project.description || `Project by FCC Studio`;
+  const shareImageUrl =
+    project.primaryImage?.url || `${apiUrl}/projects/${projectId}/share-image`;
+  const projectUrl = `${baseUrl}/${projectId}`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(title)}</title>
+    
+    <!-- Basic meta tags -->
+    <meta name="description" content="${escapeHtml(description)}" />
+    
+    <!-- Open Graph meta tags -->
+    <meta property="og:title" content="${escapeHtml(title)}" />
+    <meta property="og:description" content="${escapeHtml(description)}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="${projectUrl}" />
+    <meta property="og:site_name" content="F" />
+    <meta property="og:image" content="${shareImageUrl}" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    
+    <!-- Twitter Card meta tags -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="${escapeHtml(title)}" />
+    <meta name="twitter:description" content="${escapeHtml(description)}" />
+    <meta name="twitter:image" content="${shareImageUrl}" />
+    
+    <!-- Redirect to main app after a short delay (for any missed crawlers) -->
+    <script>
+      setTimeout(() => {
+        window.location.href = '/${projectId}';
+      }, 1000);
+    </script>
+    
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700;800&family=DM+Serif+Display&family=DM+Mono:wght@400;500&display=swap"
+      rel="stylesheet" />
+  </head>
+  <body>
+    <div style="text-align: center; padding: 2rem; font-family: 'DM Sans', sans-serif;">
+      <h1>${escapeHtml(title)}</h1>
+      <p>${escapeHtml(description)}</p>
+      <p style="color: #666;">Loading your project...</p>
+      <p style="color: #999; font-size: 0.9rem;">
+        If you're not redirected, <a href="/${projectId}">click here</a>
+      </p>
+    </div>
+  </body>
+</html>`;
+}
+
+c; // Function to get video dimensions from URL
 async function getVideoDimensions(url) {
   try {
     const { stdout } = await execFileAsync(
@@ -99,7 +172,7 @@ function sortProjectsByDate(projects) {
     if (!a.date && !b.date) return 0;
     if (!a.date) return 1; // Projects without dates go to the end
     if (!b.date) return -1; // Projects without dates go to the end
-    
+
     // Compare dates in descending order (newest first)
     return new Date(b.date) - new Date(a.date);
   });
@@ -347,7 +420,7 @@ app.get("/projects", async (req, res) => {
       projectsCache = projects;
       lastCacheUpdate = Date.now();
       saveCacheToFile(); // Save to file after updating
-      
+
       res.json(sortProjectsByDate(projects));
     }
   } catch (error) {
@@ -406,6 +479,53 @@ app.get("/projects/:projectId", async (req, res) => {
     } else {
       res.status(500).json({ error: "Failed to read project" });
     }
+  }
+});
+
+// Prerender route for social media crawlers
+app.get("/projects/prerender/:projectId", async (req, res) => {
+  try {
+    const { projectId } = req.params;
+
+    // Always serve from cache if available
+    if (projectsCache) {
+      const project = projectsCache.find((p) => p.id === projectId);
+
+      if (project) {
+        // Generate HTML with proper meta tags
+        const html = generatePageHtml(project, projectId);
+
+        // Set content type and send HTML
+        res.set("Content-Type", "text/html");
+        res.send(html);
+      } else {
+        res.status(404).send("Project not found");
+      }
+
+      // Always update cache in background
+      updateCacheInBackground();
+    } else {
+      // No cache available - fetch fresh data
+      const projects = await fetchProjectsFromRemote();
+      projectsCache = projects;
+      lastCacheUpdate = Date.now();
+      saveCacheToFile(); // Save to file after updating
+
+      const project = projects.find((p) => p.id === projectId);
+      if (project) {
+        // Generate HTML with proper meta tags
+        const html = generatePageHtml(project, projectId);
+
+        // Set content type and send HTML
+        res.set("Content-Type", "text/html");
+        res.send(html);
+      } else {
+        res.status(404).send("Project not found");
+      }
+    }
+  } catch (error) {
+    console.error("Error prerendering project:", error);
+    res.status(500).send("Internal server error");
   }
 });
 
