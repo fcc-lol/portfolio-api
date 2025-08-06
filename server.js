@@ -107,7 +107,7 @@ function generatePageHtml(project, projectId) {
     <!-- Redirect to main app after a short delay (for any missed crawlers) -->
     <script>
       setTimeout(() => {
-        window.location.href = '/${projectId}';
+        window.location.href = '${baseUrl}/${projectId}';
       }, 1000);
     </script>
     
