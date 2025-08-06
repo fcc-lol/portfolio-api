@@ -95,8 +95,6 @@ function generatePageHtml(project, projectId) {
     <meta property="og:site_name" content="FCC Studio" />
     <meta property="og:image" content="${shareImageUrl}" />
     <meta property="og:image:type" content="image/png" />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
     
     <!-- Twitter Card meta tags -->
     <meta name="twitter:card" content="summary_large_image" />
@@ -115,7 +113,7 @@ function generatePageHtml(project, projectId) {
     <div style="text-align: center; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif">
       <h1>${escapeHtml(title)}</h1>
       <p>${escapeHtml(description)}</p>
-      <p style="color: #666;">Loading your project...</p>
+      <p style="color: #666;">Loading project...</p>
       <p style="color: #999; font-size: 0.9rem;">
         If you're not redirected, <a href="/${projectId}">click here</a>
       </p>
