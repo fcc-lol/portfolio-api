@@ -128,7 +128,7 @@ function generatePageHtml(project, projectId) {
 </html>`;
 }
 
-c; // Function to get video dimensions from URL
+// Function to get video dimensions from URL
 async function getVideoDimensions(url) {
   try {
     const { stdout } = await execFileAsync(
