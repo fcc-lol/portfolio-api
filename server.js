@@ -90,6 +90,12 @@ async function getImageDimensions(url) {
 
 const execFileAsync = promisify(execFile);
 
+// Shared constants
+const SITE_DESCRIPTION =
+  "FCC Studio is a technology and art collective that makes fun software and hardware.";
+const BASE_URL = "https://fcc.lol";
+const API_URL = "https://portfolio-api.fcc.lol";
+
 // Helper function to escape HTML for safe insertion into meta tags
 function escapeHtml(text) {
   if (!text) return "";
@@ -101,17 +107,14 @@ function escapeHtml(text) {
     .replace(/'/g, "&#39;");
 }
 
-// Helper function to generate HTML with Open Graph tags for projects
-function generatePageHtml(project, projectId) {
-  const baseUrl = "https://fcc.lol";
-  const apiUrl = `https://portfolio-api.fcc.lol`;
-
-  const title = project.title || project.name || "Untitled Project";
-  const description = project.description || `Project by FCC Studio`;
-  const shareImageUrl =
-    project.primaryImage?.url || `${apiUrl}/projects/${projectId}/share-image`;
-  const projectUrl = `${baseUrl}/${projectId}`;
-
+// Helper function to generate HTML with Open Graph tags
+function generateHtml(
+  title,
+  description,
+  shareImageUrl,
+  pageUrl,
+  redirectPath
+) {
   return `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -126,7 +129,7 @@ function generatePageHtml(project, projectId) {
     <meta property="og:title" content="${escapeHtml(title)}" />
     <meta property="og:description" content="${escapeHtml(description)}" />
     <meta property="og:type" content="website" />
-    <meta property="og:url" content="${projectUrl}" />
+    <meta property="og:url" content="${pageUrl}" />
     <meta property="og:site_name" content="FCC Studio" />
     <meta property="og:image" content="${shareImageUrl}" />
     <meta property="og:image:type" content="image/jpeg" />
@@ -140,7 +143,7 @@ function generatePageHtml(project, projectId) {
     <!-- Redirect to main app after a short delay (for any missed crawlers) -->
     <script>
       setTimeout(() => {
-        window.location.href = '${baseUrl}/${projectId}';
+        window.location.href = '${BASE_URL}${redirectPath}';
       }, 1000);
     </script>
   </head>
@@ -148,187 +151,75 @@ function generatePageHtml(project, projectId) {
     <div style="text-align: center; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif">
       <h1>${escapeHtml(title)}</h1>
       <p>${escapeHtml(description)}</p>
-      <p style="color: #666;">Loading project...</p>
+      <p style="color: #666;">Loading...</p>
       <p style="color: #999; font-size: 0.9rem;">
-        If you're not redirected, <a href="/${projectId}">click here</a>
+        If you're not redirected, <a href="${redirectPath}">click here</a>
       </p>
     </div>
   </body>
 </html>`;
+}
+
+// Helper function to generate HTML with Open Graph tags for projects
+function generatePageHtml(project, projectId) {
+  const title = project.title || project.name || "Untitled Project";
+  const description = project.description || SITE_DESCRIPTION;
+  const shareImageUrl =
+    project.primaryImage?.url || `${API_URL}/projects/${projectId}/share-image`;
+  const projectUrl = `${BASE_URL}/${projectId}`;
+
+  return generateHtml(
+    title,
+    description,
+    shareImageUrl,
+    projectUrl,
+    `/${projectId}`
+  );
 }
 
 // Helper function to generate HTML for homepage
 function generateHomepageHtml() {
-  const baseUrl = "https://fcc.lol";
-  const apiUrl = `https://portfolio-api.fcc.lol`;
-
   const title = "FCC Studio – Projects";
-  const description =
-    "FCC Studio is a technology and art collective that makes fun software and hardware.";
-  const shareImageUrl = `${apiUrl}/homepage/share-image`;
-  const homepageUrl = baseUrl;
+  const shareImageUrl = `${API_URL}/homepage/share-image`;
 
-  return `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${escapeHtml(title)}</title>
-    
-    <!-- Basic meta tags -->
-    <meta name="description" content="${escapeHtml(description)}" />
-    
-    <!-- Open Graph meta tags -->
-    <meta property="og:title" content="${escapeHtml(title)}" />
-    <meta property="og:description" content="${escapeHtml(description)}" />
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="${homepageUrl}" />
-    <meta property="og:site_name" content="FCC Studio" />
-    <meta property="og:image" content="${shareImageUrl}" />
-    <meta property="og:image:type" content="image/jpeg" />
-    
-    <!-- Twitter Card meta tags -->
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="${escapeHtml(title)}" />
-    <meta name="twitter:description" content="${escapeHtml(description)}" />
-    <meta name="twitter:image" content="${shareImageUrl}" />
-    
-    <!-- Redirect to main app after a short delay (for any missed crawlers) -->
-    <script>
-      setTimeout(() => {
-        window.location.href = '${baseUrl}';
-      }, 1000);
-    </script>
-  </head>
-  <body>
-    <div style="text-align: center; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif">
-      <h1>${escapeHtml(title)}</h1>
-      <p>${escapeHtml(description)}</p>
-      <p style="color: #666;">Loading portfolio...</p>
-      <p style="color: #999; font-size: 0.9rem;">
-        If you're not redirected, <a href="/">click here</a>
-      </p>
-    </div>
-  </body>
-</html>`;
+  return generateHtml(title, SITE_DESCRIPTION, shareImageUrl, BASE_URL, "/");
 }
 
 // Helper function to generate HTML for tag pages
 function generateTagPageHtml(tagName, projectCount) {
-  const baseUrl = "https://fcc.lol";
-  const apiUrl = `https://portfolio-api.fcc.lol`;
-
   const title = `FCC Studio – Projects with #${tagName}`;
-  const description = `Explore ${projectCount} project${
-    projectCount !== 1 ? "s" : ""
-  } tagged with "${tagName}" from FCC Studio.`;
-  const shareImageUrl = `${apiUrl}/tag/${encodeURIComponent(
+  const shareImageUrl = `${API_URL}/tag/${encodeURIComponent(
     tagName
   )}/share-image`;
-  const tagUrl = `${baseUrl}/tag/${tagName}`;
+  const tagUrl = `${BASE_URL}/tag/${tagName}`;
 
-  return `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${escapeHtml(title)}</title>
-    
-    <!-- Basic meta tags -->
-    <meta name="description" content="${escapeHtml(description)}" />
-    
-    <!-- Open Graph meta tags -->
-    <meta property="og:title" content="${escapeHtml(title)}" />
-    <meta property="og:description" content="${escapeHtml(description)}" />
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="${tagUrl}" />
-    <meta property="og:site_name" content="FCC Studio" />
-    <meta property="og:image" content="${shareImageUrl}" />
-    <meta property="og:image:type" content="image/jpeg" />
-    
-    <!-- Twitter Card meta tags -->
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="${escapeHtml(title)}" />
-    <meta name="twitter:description" content="${escapeHtml(description)}" />
-    <meta name="twitter:image" content="${shareImageUrl}" />
-    
-    <!-- Redirect to main app after a short delay (for any missed crawlers) -->
-    <script>
-      setTimeout(() => {
-        window.location.href = '${baseUrl}/tag/${tagName}';
-      }, 1000);
-    </script>
-  </head>
-  <body>
-    <div style="text-align: center; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif">
-      <h1>${escapeHtml(title)}</h1>
-      <p>${escapeHtml(description)}</p>
-      <p style="color: #666;">Loading projects...</p>
-      <p style="color: #999; font-size: 0.9rem;">
-        If you're not redirected, <a href="/tag/${tagName}">click here</a>
-      </p>
-    </div>
-  </body>
-</html>`;
+  return generateHtml(
+    title,
+    SITE_DESCRIPTION,
+    shareImageUrl,
+    tagUrl,
+    `/tag/${tagName}`
+  );
 }
 
 // Helper function to generate HTML for person pages
 function generatePersonPageHtml(personName, projectCount) {
-  const baseUrl = "https://fcc.lol";
-  const apiUrl = `https://portfolio-api.fcc.lol`;
-
-  const title = `FCC Studio – Projects with ${personName}`;
-  const description = `View ${projectCount} project${
-    projectCount !== 1 ? "s" : ""
-  } by ${personName} at FCC Studio.`;
-  const shareImageUrl = `${apiUrl}/person/${encodeURIComponent(
+  // Capitalize the first letter of the person name
+  const capitalizedPersonName =
+    personName.charAt(0).toUpperCase() + personName.slice(1);
+  const title = `FCC Studio – Projects with ${capitalizedPersonName}`;
+  const shareImageUrl = `${API_URL}/person/${encodeURIComponent(
     personName
   )}/share-image`;
-  const personUrl = `${baseUrl}/person/${personName}`;
+  const personUrl = `${BASE_URL}/person/${personName}`;
 
-  return `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${escapeHtml(title)}</title>
-    
-    <!-- Basic meta tags -->
-    <meta name="description" content="${escapeHtml(description)}" />
-    
-    <!-- Open Graph meta tags -->
-    <meta property="og:title" content="${escapeHtml(title)}" />
-    <meta property="og:description" content="${escapeHtml(description)}" />
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="${personUrl}" />
-    <meta property="og:site_name" content="FCC Studio" />
-    <meta property="og:image" content="${shareImageUrl}" />
-    <meta property="og:image:type" content="image/jpeg" />
-    
-    <!-- Twitter Card meta tags -->
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="${escapeHtml(title)}" />
-    <meta name="twitter:description" content="${escapeHtml(description)}" />
-    <meta name="twitter:image" content="${shareImageUrl}" />
-    
-    <!-- Redirect to main app after a short delay (for any missed crawlers) -->
-    <script>
-      setTimeout(() => {
-        window.location.href = '${baseUrl}/person/${personName}';
-      }, 1000);
-    </script>
-  </head>
-  <body>
-    <div style="text-align: center; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif">
-      <h1>${escapeHtml(title)}</h1>
-      <p>${escapeHtml(description)}</p>
-      <p style="color: #666;">Loading projects...</p>
-      <p style="color: #999; font-size: 0.9rem;">
-        If you're not redirected, <a href="/person/${personName}">click here</a>
-      </p>
-    </div>
-  </body>
-</html>`;
+  return generateHtml(
+    title,
+    SITE_DESCRIPTION,
+    shareImageUrl,
+    personUrl,
+    `/person/${personName}`
+  );
 }
 
 // Function to get video dimensions from URL
