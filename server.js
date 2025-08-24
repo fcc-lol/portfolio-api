@@ -101,7 +101,7 @@ function escapeHtml(text) {
     .replace(/'/g, "&#39;");
 }
 
-// Helper function to generate HTML with Open Graph tags
+// Helper function to generate HTML with Open Graph tags for projects
 function generatePageHtml(project, projectId) {
   const baseUrl = "https://fcc.lol";
   const apiUrl = `https://portfolio-api.fcc.lol`;
@@ -129,7 +129,7 @@ function generatePageHtml(project, projectId) {
     <meta property="og:url" content="${projectUrl}" />
     <meta property="og:site_name" content="FCC Studio" />
     <meta property="og:image" content="${shareImageUrl}" />
-    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:type" content="image/jpeg" />
     
     <!-- Twitter Card meta tags -->
     <meta name="twitter:card" content="summary_large_image" />
@@ -151,6 +151,180 @@ function generatePageHtml(project, projectId) {
       <p style="color: #666;">Loading project...</p>
       <p style="color: #999; font-size: 0.9rem;">
         If you're not redirected, <a href="/${projectId}">click here</a>
+      </p>
+    </div>
+  </body>
+</html>`;
+}
+
+// Helper function to generate HTML for homepage
+function generateHomepageHtml() {
+  const baseUrl = "https://fcc.lol";
+  const apiUrl = `https://portfolio-api.fcc.lol`;
+
+  const title = "FCC Studio - Creative Portfolio";
+  const description =
+    "Explore our latest creative projects, from design to development and everything in between.";
+  const shareImageUrl = `${apiUrl}/homepage/share-image`;
+  const homepageUrl = baseUrl;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(title)}</title>
+    
+    <!-- Basic meta tags -->
+    <meta name="description" content="${escapeHtml(description)}" />
+    
+    <!-- Open Graph meta tags -->
+    <meta property="og:title" content="${escapeHtml(title)}" />
+    <meta property="og:description" content="${escapeHtml(description)}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="${homepageUrl}" />
+    <meta property="og:site_name" content="FCC Studio" />
+    <meta property="og:image" content="${shareImageUrl}" />
+    <meta property="og:image:type" content="image/jpeg" />
+    
+    <!-- Twitter Card meta tags -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="${escapeHtml(title)}" />
+    <meta name="twitter:description" content="${escapeHtml(description)}" />
+    <meta name="twitter:image" content="${shareImageUrl}" />
+    
+    <!-- Redirect to main app after a short delay (for any missed crawlers) -->
+    <script>
+      setTimeout(() => {
+        window.location.href = '${baseUrl}';
+      }, 1000);
+    </script>
+  </head>
+  <body>
+    <div style="text-align: center; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif">
+      <h1>${escapeHtml(title)}</h1>
+      <p>${escapeHtml(description)}</p>
+      <p style="color: #666;">Loading portfolio...</p>
+      <p style="color: #999; font-size: 0.9rem;">
+        If you're not redirected, <a href="/">click here</a>
+      </p>
+    </div>
+  </body>
+</html>`;
+}
+
+// Helper function to generate HTML for tag pages
+function generateTagPageHtml(tagName, projectCount) {
+  const baseUrl = "https://fcc.lol";
+  const apiUrl = `https://portfolio-api.fcc.lol`;
+
+  const title = `${tagName} Projects - FCC Studio`;
+  const description = `Explore ${projectCount} project${
+    projectCount !== 1 ? "s" : ""
+  } tagged with "${tagName}" from FCC Studio.`;
+  const shareImageUrl = `${apiUrl}/tag/${encodeURIComponent(
+    tagName
+  )}/share-image`;
+  const tagUrl = `${baseUrl}/tag/${tagName}`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(title)}</title>
+    
+    <!-- Basic meta tags -->
+    <meta name="description" content="${escapeHtml(description)}" />
+    
+    <!-- Open Graph meta tags -->
+    <meta property="og:title" content="${escapeHtml(title)}" />
+    <meta property="og:description" content="${escapeHtml(description)}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="${tagUrl}" />
+    <meta property="og:site_name" content="FCC Studio" />
+    <meta property="og:image" content="${shareImageUrl}" />
+    <meta property="og:image:type" content="image/jpeg" />
+    
+    <!-- Twitter Card meta tags -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="${escapeHtml(title)}" />
+    <meta name="twitter:description" content="${escapeHtml(description)}" />
+    <meta name="twitter:image" content="${shareImageUrl}" />
+    
+    <!-- Redirect to main app after a short delay (for any missed crawlers) -->
+    <script>
+      setTimeout(() => {
+        window.location.href = '${baseUrl}/tag/${tagName}';
+      }, 1000);
+    </script>
+  </head>
+  <body>
+    <div style="text-align: center; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif">
+      <h1>${escapeHtml(title)}</h1>
+      <p>${escapeHtml(description)}</p>
+      <p style="color: #666;">Loading projects...</p>
+      <p style="color: #999; font-size: 0.9rem;">
+        If you're not redirected, <a href="/tag/${tagName}">click here</a>
+      </p>
+    </div>
+  </body>
+</html>`;
+}
+
+// Helper function to generate HTML for person pages
+function generatePersonPageHtml(personName, projectCount) {
+  const baseUrl = "https://fcc.lol";
+  const apiUrl = `https://portfolio-api.fcc.lol`;
+
+  const title = `${personName} - FCC Studio`;
+  const description = `View ${projectCount} project${
+    projectCount !== 1 ? "s" : ""
+  } by ${personName} at FCC Studio.`;
+  const shareImageUrl = `${apiUrl}/person/${encodeURIComponent(
+    personName
+  )}/share-image`;
+  const personUrl = `${baseUrl}/person/${personName}`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(title)}</title>
+    
+    <!-- Basic meta tags -->
+    <meta name="description" content="${escapeHtml(description)}" />
+    
+    <!-- Open Graph meta tags -->
+    <meta property="og:title" content="${escapeHtml(title)}" />
+    <meta property="og:description" content="${escapeHtml(description)}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="${personUrl}" />
+    <meta property="og:site_name" content="FCC Studio" />
+    <meta property="og:image" content="${shareImageUrl}" />
+    <meta property="og:image:type" content="image/jpeg" />
+    
+    <!-- Twitter Card meta tags -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="${escapeHtml(title)}" />
+    <meta name="twitter:description" content="${escapeHtml(description)}" />
+    <meta name="twitter:image" content="${shareImageUrl}" />
+    
+    <!-- Redirect to main app after a short delay (for any missed crawlers) -->
+    <script>
+      setTimeout(() => {
+        window.location.href = '${baseUrl}/person/${personName}';
+      }, 1000);
+    </script>
+  </head>
+  <body>
+    <div style="text-align: center; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif">
+      <h1>${escapeHtml(title)}</h1>
+      <p>${escapeHtml(description)}</p>
+      <p style="color: #666;">Loading projects...</p>
+      <p style="color: #999; font-size: 0.9rem;">
+        If you're not redirected, <a href="/person/${personName}">click here</a>
       </p>
     </div>
   </body>
@@ -753,6 +927,92 @@ app.get("/admin/cache-status", authenticateAdmin, (req, res) => {
     ttlMs: CACHE_TTL,
     ttlMinutes: CACHE_TTL / 60000
   });
+});
+
+// Homepage prerender route for social media crawlers
+app.get("/projects/prerender", async (req, res) => {
+  try {
+    // Generate HTML with proper meta tags for homepage
+    const html = generateHomepageHtml();
+
+    // Set content type and send HTML
+    res.set("Content-Type", "text/html");
+    res.send(html);
+
+    // Update cache in background if needed
+    if (projectsCache) {
+      updateCacheInBackground();
+    }
+  } catch (error) {
+    console.error("Error prerendering homepage:", error);
+    res.status(500).send("Internal server error");
+  }
+});
+
+// Tag page prerender route for social media crawlers
+app.get("/projects/prerender/tag/:tagName", async (req, res) => {
+  try {
+    const { tagName } = req.params;
+
+    // Get projects from cache
+    if (!projectsCache) {
+      // If no cache, generate basic HTML without project count
+      const html = generateTagPageHtml(tagName, 0);
+      res.set("Content-Type", "text/html");
+      res.send(html);
+      return;
+    }
+
+    // Filter projects by tag to get count
+    const tagProjects = filterProjectsByTag(projectsCache, tagName);
+    const projectCount = tagProjects.length;
+
+    // Generate HTML with proper meta tags
+    const html = generateTagPageHtml(tagName, projectCount);
+
+    // Set content type and send HTML
+    res.set("Content-Type", "text/html");
+    res.send(html);
+
+    // Update cache in background
+    updateCacheInBackground();
+  } catch (error) {
+    console.error("Error prerendering tag page:", error);
+    res.status(500).send("Internal server error");
+  }
+});
+
+// Person page prerender route for social media crawlers
+app.get("/projects/prerender/person/:personName", async (req, res) => {
+  try {
+    const { personName } = req.params;
+
+    // Get projects from cache
+    if (!projectsCache) {
+      // If no cache, generate basic HTML without project count
+      const html = generatePersonPageHtml(personName, 0);
+      res.set("Content-Type", "text/html");
+      res.send(html);
+      return;
+    }
+
+    // Filter projects by person to get count
+    const personProjects = filterProjectsByPerson(projectsCache, personName);
+    const projectCount = personProjects.length;
+
+    // Generate HTML with proper meta tags
+    const html = generatePersonPageHtml(personName, projectCount);
+
+    // Set content type and send HTML
+    res.set("Content-Type", "text/html");
+    res.send(html);
+
+    // Update cache in background
+    updateCacheInBackground();
+  } catch (error) {
+    console.error("Error prerendering person page:", error);
+    res.status(500).send("Internal server error");
+  }
 });
 
 // Prerender route for social media crawlers
