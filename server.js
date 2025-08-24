@@ -404,6 +404,37 @@ function filterProjectsByPerson(projects, personName) {
   });
 }
 
+// Function to get all unique tags from projects
+function getAllTags(projects) {
+  const tagSet = new Set();
+
+  projects.forEach((project) => {
+    if (project.tags && Array.isArray(project.tags)) {
+      project.tags.forEach((tag) => {
+        if (tag && typeof tag === "string") {
+          tagSet.add(tag.trim());
+        }
+      });
+    }
+  });
+
+  return Array.from(tagSet).sort();
+}
+
+// Function to filter projects by tag
+function filterProjectsByTag(projects, tagName) {
+  const lowerTagName = tagName.toLowerCase();
+  return projects.filter((project) => {
+    if (project.tags && Array.isArray(project.tags)) {
+      return project.tags.some(
+        (tag) =>
+          tag && typeof tag === "string" && tag.toLowerCase() === lowerTagName
+      );
+    }
+    return false;
+  });
+}
+
 // Function to update cache in background
 async function updateCacheInBackground() {
   if (isUpdatingCache) {
@@ -544,6 +575,84 @@ app.get("/projects/person/:personName", async (req, res) => {
       const personProjectsWithoutMedia =
         removeMediaFromProjects(personProjects);
       res.json(sortProjectsByDate(personProjectsWithoutMedia));
+    } else {
+      res.status(500).json({ error: "Failed to read projects" });
+    }
+  }
+});
+
+// Get all unique tags from projects
+app.get("/tags", async (req, res) => {
+  try {
+    // Always serve from cache if available
+    if (projectsCache) {
+      const tags = getAllTags(projectsCache);
+      res.json(tags);
+
+      // Always update cache in background
+      updateCacheInBackground();
+    } else {
+      // No cache available - fetch fresh data
+      const projects = await fetchProjectsFromRemote();
+      projectsCache = projects;
+      lastCacheUpdate = Date.now();
+      saveCacheToFile(); // Save to file after updating
+
+      const tags = getAllTags(projects);
+      res.json(tags);
+    }
+  } catch (error) {
+    console.error("Error reading tags:", error);
+
+    // If we have cache, serve it as fallback
+    if (projectsCache) {
+      const tags = getAllTags(projectsCache);
+      res.json(tags);
+    } else {
+      res.status(500).json({ error: "Failed to read tags" });
+    }
+  }
+});
+
+// Get projects by tag
+app.get("/projects/tag/:tagName", async (req, res) => {
+  try {
+    const { tagName } = req.params;
+
+    // Always serve from cache if available
+    if (projectsCache) {
+      const tagProjects = filterProjectsByTag(projectsCache, tagName);
+      const tagProjectsWithoutMedia = removeMediaFromProjects(tagProjects);
+      res.json(sortProjectsByDate(tagProjectsWithoutMedia));
+
+      // Always update cache in background
+      updateCacheInBackground();
+    } else {
+      // No cache available - fetch fresh data
+      const projects = await fetchProjectsFromRemote();
+      projectsCache = projects;
+      lastCacheUpdate = Date.now();
+      saveCacheToFile(); // Save to file after updating
+
+      // Filter projects by tag
+      const tagProjects = filterProjectsByTag(projects, tagName);
+      const tagProjectsWithoutMedia = removeMediaFromProjects(tagProjects);
+      res.json(sortProjectsByDate(tagProjectsWithoutMedia));
+    }
+  } catch (error) {
+    console.error(
+      `Error reading projects for tag ${req.params.tagName}:`,
+      error
+    );
+
+    // If we have cache, serve it as fallback
+    if (projectsCache) {
+      const tagProjects = filterProjectsByTag(
+        projectsCache,
+        req.params.tagName
+      );
+      const tagProjectsWithoutMedia = removeMediaFromProjects(tagProjects);
+      res.json(sortProjectsByDate(tagProjectsWithoutMedia));
     } else {
       res.status(500).json({ error: "Failed to read projects" });
     }
