@@ -162,9 +162,9 @@ function generateHomepageHtml() {
   const baseUrl = "https://fcc.lol";
   const apiUrl = `https://portfolio-api.fcc.lol`;
 
-  const title = "FCC Studio - Creative Portfolio";
+  const title = "FCC Studio – Projects";
   const description =
-    "Explore our latest creative projects, from design to development and everything in between.";
+    "FCC Studio is a technology and art collective that makes fun software and hardware.";
   const shareImageUrl = `${apiUrl}/homepage/share-image`;
   const homepageUrl = baseUrl;
 
@@ -218,7 +218,7 @@ function generateTagPageHtml(tagName, projectCount) {
   const baseUrl = "https://fcc.lol";
   const apiUrl = `https://portfolio-api.fcc.lol`;
 
-  const title = `${tagName} Projects - FCC Studio`;
+  const title = `FCC Studio – Projects with #${tagName}`;
   const description = `Explore ${projectCount} project${
     projectCount !== 1 ? "s" : ""
   } tagged with "${tagName}" from FCC Studio.`;
@@ -277,7 +277,7 @@ function generatePersonPageHtml(personName, projectCount) {
   const baseUrl = "https://fcc.lol";
   const apiUrl = `https://portfolio-api.fcc.lol`;
 
-  const title = `${personName} - FCC Studio`;
+  const title = `FCC Studio – Projects with ${personName}`;
   const description = `View ${projectCount} project${
     projectCount !== 1 ? "s" : ""
   } by ${personName} at FCC Studio.`;
