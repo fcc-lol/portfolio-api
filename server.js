@@ -381,6 +381,14 @@ function loadCacheFromFile() {
   return false;
 }
 
+// Function to remove media array from projects (keep only primaryImage)
+function removeMediaFromProjects(projects) {
+  return projects.map((project) => {
+    const { media, ...projectWithoutMedia } = project;
+    return projectWithoutMedia;
+  });
+}
+
 // Function to filter projects by person name
 function filterProjectsByPerson(projects, personName) {
   const lowerPersonName = personName.toLowerCase();
@@ -419,7 +427,8 @@ app.get("/projects", async (req, res) => {
   try {
     // Always serve from cache if available
     if (projectsCache) {
-      res.json(sortProjectsByDate(projectsCache));
+      const projectsWithoutMedia = removeMediaFromProjects(projectsCache);
+      res.json(sortProjectsByDate(projectsWithoutMedia));
 
       // Always update cache in background
       updateCacheInBackground();
@@ -430,14 +439,16 @@ app.get("/projects", async (req, res) => {
       lastCacheUpdate = Date.now();
       saveCacheToFile(); // Save to file after updating
 
-      res.json(sortProjectsByDate(projects));
+      const projectsWithoutMedia = removeMediaFromProjects(projects);
+      res.json(sortProjectsByDate(projectsWithoutMedia));
     }
   } catch (error) {
     console.error("Error reading projects:", error);
 
     // If we have cache, serve it as fallback
     if (projectsCache) {
-      res.json(sortProjectsByDate(projectsCache));
+      const projectsWithoutMedia = removeMediaFromProjects(projectsCache);
+      res.json(sortProjectsByDate(projectsWithoutMedia));
     } else {
       res.status(500).json({ error: "Failed to read projects" });
     }
@@ -499,7 +510,9 @@ app.get("/projects/person/:personName", async (req, res) => {
     // Always serve from cache if available
     if (projectsCache) {
       const personProjects = filterProjectsByPerson(projectsCache, personName);
-      res.json(sortProjectsByDate(personProjects));
+      const personProjectsWithoutMedia =
+        removeMediaFromProjects(personProjects);
+      res.json(sortProjectsByDate(personProjectsWithoutMedia));
 
       // Always update cache in background
       updateCacheInBackground();
@@ -512,7 +525,9 @@ app.get("/projects/person/:personName", async (req, res) => {
 
       // Filter projects by person
       const personProjects = filterProjectsByPerson(projects, personName);
-      res.json(sortProjectsByDate(personProjects));
+      const personProjectsWithoutMedia =
+        removeMediaFromProjects(personProjects);
+      res.json(sortProjectsByDate(personProjectsWithoutMedia));
     }
   } catch (error) {
     console.error(
@@ -526,7 +541,9 @@ app.get("/projects/person/:personName", async (req, res) => {
         projectsCache,
         req.params.personName
       );
-      res.json(sortProjectsByDate(personProjects));
+      const personProjectsWithoutMedia =
+        removeMediaFromProjects(personProjects);
+      res.json(sortProjectsByDate(personProjectsWithoutMedia));
     } else {
       res.status(500).json({ error: "Failed to read projects" });
     }
