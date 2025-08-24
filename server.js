@@ -6,6 +6,7 @@ import imageSize from "image-size";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import dotenv from "dotenv";
+import sharp from "sharp";
 
 // Load environment variables
 dotenv.config();
@@ -798,6 +799,618 @@ app.get("/projects/prerender/:projectId", async (req, res) => {
   } catch (error) {
     console.error("Error prerendering project:", error);
     res.status(500).send("Internal server error");
+  }
+});
+
+// Homepage share image endpoint
+app.get("/homepage/share-image", async (req, res) => {
+  try {
+    // Get projects from cache
+    if (!projectsCache) {
+      return res.status(400).json({ error: "No projects data available" });
+    }
+
+    // Get sorted projects and extract primary images
+    const sortedProjects = sortProjectsByDate(projectsCache);
+    const images = [];
+
+    for (const project of sortedProjects) {
+      if (project.primaryImage?.url && images.length < 4) {
+        images.push(project.primaryImage.url);
+      }
+    }
+
+    if (images.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "No primary images found in projects" });
+    }
+
+    // Download and process images
+    const imageBuffers = [];
+    const baseUrl = "https://static.fcc.lol/portfolio-storage";
+
+    for (const imageUrl of images) {
+      try {
+        let imagePath;
+
+        if (imageUrl.startsWith(baseUrl)) {
+          // Extract the relative path from the full URL
+          const relativePath = imageUrl.replace(baseUrl + "/", "");
+          // For homepage, we'll fetch from remote URLs directly
+          const response = await fetch(imageUrl);
+          if (response.ok) {
+            const arrayBuffer = await response.arrayBuffer();
+            const imageBuffer = Buffer.from(arrayBuffer);
+            imageBuffers.push(imageBuffer);
+          }
+        }
+      } catch (error) {
+        console.error(`[DEBUG] Error processing image ${imageUrl}:`, error);
+      }
+    }
+
+    if (imageBuffers.length === 0) {
+      return res.status(400).json({ error: "No valid images found" });
+    }
+
+    // Create composite image based on number of images
+    let composite;
+    const canvasWidth = 1200;
+    const canvasHeight = 630;
+
+    if (imageBuffers.length === 1) {
+      // Single image - resize to fill canvas
+      composite = sharp(imageBuffers[0]).resize(canvasWidth, canvasHeight, {
+        fit: "cover",
+        position: "center",
+        withoutEnlargement: false
+      });
+    } else if (imageBuffers.length === 2) {
+      // Two images - split vertically
+      const halfWidth = canvasWidth / 2;
+      const [img1, img2] = await Promise.all([
+        sharp(imageBuffers[0])
+          .resize(halfWidth, canvasHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[1])
+          .resize(halfWidth, canvasHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer()
+      ]);
+
+      composite = sharp({
+        create: {
+          width: canvasWidth,
+          height: canvasHeight,
+          channels: 3,
+          background: { r: 255, g: 255, b: 255 }
+        }
+      }).composite([
+        { input: img1, left: 0, top: 0 },
+        { input: img2, left: halfWidth, top: 0 }
+      ]);
+    } else if (imageBuffers.length === 3) {
+      // Three images - one large on left, two stacked on right
+      const halfWidth = canvasWidth / 2;
+      const halfHeight = canvasHeight / 2;
+
+      const [img1, img2, img3] = await Promise.all([
+        sharp(imageBuffers[0])
+          .resize(halfWidth, canvasHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[1])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[2])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer()
+      ]);
+
+      composite = sharp({
+        create: {
+          width: canvasWidth,
+          height: canvasHeight,
+          channels: 3,
+          background: { r: 255, g: 255, b: 255 }
+        }
+      }).composite([
+        { input: img1, left: 0, top: 0 },
+        { input: img2, left: halfWidth, top: 0 },
+        { input: img3, left: halfWidth, top: halfHeight }
+      ]);
+    } else {
+      // Four or more images - 2x2 grid
+      const halfWidth = canvasWidth / 2;
+      const halfHeight = canvasHeight / 2;
+
+      const [img1, img2, img3, img4] = await Promise.all([
+        sharp(imageBuffers[0])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[1])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[2])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[3])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer()
+      ]);
+
+      composite = sharp({
+        create: {
+          width: canvasWidth,
+          height: canvasHeight,
+          channels: 3,
+          background: { r: 255, g: 255, b: 255 }
+        }
+      }).composite([
+        { input: img1, left: 0, top: 0 },
+        { input: img2, left: halfWidth, top: 0 },
+        { input: img3, left: 0, top: halfHeight },
+        { input: img4, left: halfWidth, top: halfHeight }
+      ]);
+    }
+
+    // Generate final image
+    const outputBuffer = await composite.jpeg({ quality: 85 }).toBuffer();
+
+    // Set headers to serve the image directly
+    res.set({
+      "Content-Type": "image/jpeg",
+      "Content-Length": outputBuffer.length,
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+      "Content-Disposition": `inline; filename="homepage-share.jpg"`
+    });
+
+    // Send the image buffer directly
+    res.send(outputBuffer);
+  } catch (error) {
+    console.error("Error generating homepage share image:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Tag page share image endpoint
+app.get("/tag/:tagName/share-image", async (req, res) => {
+  try {
+    const { tagName } = req.params;
+
+    // Get projects from cache
+    if (!projectsCache) {
+      return res.status(400).json({ error: "No projects data available" });
+    }
+
+    // Filter projects by tag and extract primary images
+    const tagProjects = filterProjectsByTag(projectsCache, tagName);
+    const sortedProjects = sortProjectsByDate(tagProjects);
+    const images = [];
+
+    for (const project of sortedProjects) {
+      if (project.primaryImage?.url && images.length < 4) {
+        images.push(project.primaryImage.url);
+      }
+    }
+
+    if (images.length === 0) {
+      return res.status(400).json({
+        error: `No primary images found in projects with tag "${tagName}"`
+      });
+    }
+
+    // Download and process images
+    const imageBuffers = [];
+    const baseUrl = "https://static.fcc.lol/portfolio-storage";
+
+    for (const imageUrl of images) {
+      try {
+        if (imageUrl.startsWith(baseUrl)) {
+          const response = await fetch(imageUrl);
+          if (response.ok) {
+            const arrayBuffer = await response.arrayBuffer();
+            const imageBuffer = Buffer.from(arrayBuffer);
+            imageBuffers.push(imageBuffer);
+          }
+        }
+      } catch (error) {
+        console.error(`[DEBUG] Error processing image ${imageUrl}:`, error);
+      }
+    }
+
+    if (imageBuffers.length === 0) {
+      return res.status(400).json({ error: "No valid images found" });
+    }
+
+    // Create composite image based on number of images (same logic as homepage)
+    let composite;
+    const canvasWidth = 1200;
+    const canvasHeight = 630;
+
+    if (imageBuffers.length === 1) {
+      composite = sharp(imageBuffers[0]).resize(canvasWidth, canvasHeight, {
+        fit: "cover",
+        position: "center",
+        withoutEnlargement: false
+      });
+    } else if (imageBuffers.length === 2) {
+      const halfWidth = canvasWidth / 2;
+      const [img1, img2] = await Promise.all([
+        sharp(imageBuffers[0])
+          .resize(halfWidth, canvasHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[1])
+          .resize(halfWidth, canvasHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer()
+      ]);
+
+      composite = sharp({
+        create: {
+          width: canvasWidth,
+          height: canvasHeight,
+          channels: 3,
+          background: { r: 255, g: 255, b: 255 }
+        }
+      }).composite([
+        { input: img1, left: 0, top: 0 },
+        { input: img2, left: halfWidth, top: 0 }
+      ]);
+    } else if (imageBuffers.length === 3) {
+      const halfWidth = canvasWidth / 2;
+      const halfHeight = canvasHeight / 2;
+
+      const [img1, img2, img3] = await Promise.all([
+        sharp(imageBuffers[0])
+          .resize(halfWidth, canvasHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[1])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[2])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer()
+      ]);
+
+      composite = sharp({
+        create: {
+          width: canvasWidth,
+          height: canvasHeight,
+          channels: 3,
+          background: { r: 255, g: 255, b: 255 }
+        }
+      }).composite([
+        { input: img1, left: 0, top: 0 },
+        { input: img2, left: halfWidth, top: 0 },
+        { input: img3, left: halfWidth, top: halfHeight }
+      ]);
+    } else {
+      const halfWidth = canvasWidth / 2;
+      const halfHeight = canvasHeight / 2;
+
+      const [img1, img2, img3, img4] = await Promise.all([
+        sharp(imageBuffers[0])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[1])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[2])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[3])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer()
+      ]);
+
+      composite = sharp({
+        create: {
+          width: canvasWidth,
+          height: canvasHeight,
+          channels: 3,
+          background: { r: 255, g: 255, b: 255 }
+        }
+      }).composite([
+        { input: img1, left: 0, top: 0 },
+        { input: img2, left: halfWidth, top: 0 },
+        { input: img3, left: 0, top: halfHeight },
+        { input: img4, left: halfWidth, top: halfHeight }
+      ]);
+    }
+
+    // Generate final image
+    const outputBuffer = await composite.jpeg({ quality: 85 }).toBuffer();
+
+    // Set headers to serve the image directly
+    res.set({
+      "Content-Type": "image/jpeg",
+      "Content-Length": outputBuffer.length,
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+      "Content-Disposition": `inline; filename="${tagName}-share.jpg"`
+    });
+
+    // Send the image buffer directly
+    res.send(outputBuffer);
+  } catch (error) {
+    console.error("Error generating tag share image:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Person page share image endpoint
+app.get("/person/:personName/share-image", async (req, res) => {
+  try {
+    const { personName } = req.params;
+
+    // Get projects from cache
+    if (!projectsCache) {
+      return res.status(400).json({ error: "No projects data available" });
+    }
+
+    // Filter projects by person and extract primary images
+    const personProjects = filterProjectsByPerson(projectsCache, personName);
+    const sortedProjects = sortProjectsByDate(personProjects);
+    const images = [];
+
+    for (const project of sortedProjects) {
+      if (project.primaryImage?.url && images.length < 4) {
+        images.push(project.primaryImage.url);
+      }
+    }
+
+    if (images.length === 0) {
+      return res.status(400).json({
+        error: `No primary images found in projects by "${personName}"`
+      });
+    }
+
+    // Download and process images
+    const imageBuffers = [];
+    const baseUrl = "https://static.fcc.lol/portfolio-storage";
+
+    for (const imageUrl of images) {
+      try {
+        if (imageUrl.startsWith(baseUrl)) {
+          const response = await fetch(imageUrl);
+          if (response.ok) {
+            const arrayBuffer = await response.arrayBuffer();
+            const imageBuffer = Buffer.from(arrayBuffer);
+            imageBuffers.push(imageBuffer);
+          }
+        }
+      } catch (error) {
+        console.error(`[DEBUG] Error processing image ${imageUrl}:`, error);
+      }
+    }
+
+    if (imageBuffers.length === 0) {
+      return res.status(400).json({ error: "No valid images found" });
+    }
+
+    // Create composite image based on number of images (same logic as homepage)
+    let composite;
+    const canvasWidth = 1200;
+    const canvasHeight = 630;
+
+    if (imageBuffers.length === 1) {
+      composite = sharp(imageBuffers[0]).resize(canvasWidth, canvasHeight, {
+        fit: "cover",
+        position: "center",
+        withoutEnlargement: false
+      });
+    } else if (imageBuffers.length === 2) {
+      const halfWidth = canvasWidth / 2;
+      const [img1, img2] = await Promise.all([
+        sharp(imageBuffers[0])
+          .resize(halfWidth, canvasHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[1])
+          .resize(halfWidth, canvasHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer()
+      ]);
+
+      composite = sharp({
+        create: {
+          width: canvasWidth,
+          height: canvasHeight,
+          channels: 3,
+          background: { r: 255, g: 255, b: 255 }
+        }
+      }).composite([
+        { input: img1, left: 0, top: 0 },
+        { input: img2, left: halfWidth, top: 0 }
+      ]);
+    } else if (imageBuffers.length === 3) {
+      const halfWidth = canvasWidth / 2;
+      const halfHeight = canvasHeight / 2;
+
+      const [img1, img2, img3] = await Promise.all([
+        sharp(imageBuffers[0])
+          .resize(halfWidth, canvasHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[1])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[2])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer()
+      ]);
+
+      composite = sharp({
+        create: {
+          width: canvasWidth,
+          height: canvasHeight,
+          channels: 3,
+          background: { r: 255, g: 255, b: 255 }
+        }
+      }).composite([
+        { input: img1, left: 0, top: 0 },
+        { input: img2, left: halfWidth, top: 0 },
+        { input: img3, left: halfWidth, top: halfHeight }
+      ]);
+    } else {
+      const halfWidth = canvasWidth / 2;
+      const halfHeight = canvasHeight / 2;
+
+      const [img1, img2, img3, img4] = await Promise.all([
+        sharp(imageBuffers[0])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[1])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[2])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer(),
+        sharp(imageBuffers[3])
+          .resize(halfWidth, halfHeight, {
+            fit: "cover",
+            position: "center",
+            withoutEnlargement: false
+          })
+          .toBuffer()
+      ]);
+
+      composite = sharp({
+        create: {
+          width: canvasWidth,
+          height: canvasHeight,
+          channels: 3,
+          background: { r: 255, g: 255, b: 255 }
+        }
+      }).composite([
+        { input: img1, left: 0, top: 0 },
+        { input: img2, left: halfWidth, top: 0 },
+        { input: img3, left: 0, top: halfHeight },
+        { input: img4, left: halfWidth, top: halfHeight }
+      ]);
+    }
+
+    // Generate final image
+    const outputBuffer = await composite.jpeg({ quality: 85 }).toBuffer();
+
+    // Set headers to serve the image directly
+    res.set({
+      "Content-Type": "image/jpeg",
+      "Content-Length": outputBuffer.length,
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+      "Content-Disposition": `inline; filename="${personName}-share.jpg"`
+    });
+
+    // Send the image buffer directly
+    res.send(outputBuffer);
+  } catch (error) {
+    console.error("Error generating person share image:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
