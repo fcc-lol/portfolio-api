@@ -5,6 +5,10 @@ import cors from "cors";
 import imageSize from "image-size";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import dotenv from "dotenv";
+
+// Load environment variables
+dotenv.config();
 
 const app = express();
 const port = 3109;
@@ -24,6 +28,35 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+
+// Middleware to authenticate admin routes
+function authenticateAdmin(req, res, next) {
+  const { fccAdminApiKey } = req.query;
+  const expectedKey = process.env.FCC_ADMIN_API_KEY;
+
+  if (!expectedKey) {
+    return res.status(500).json({
+      error: "Server configuration error",
+      message: "FCC_ADMIN_API_KEY environment variable not set"
+    });
+  }
+
+  if (!fccAdminApiKey) {
+    return res.status(401).json({
+      error: "Authentication required",
+      message: "Missing fccAdminApiKey parameter"
+    });
+  }
+
+  if (fccAdminApiKey !== expectedKey) {
+    return res.status(403).json({
+      error: "Authentication failed",
+      message: "Invalid API key"
+    });
+  }
+
+  next();
+}
 
 // Cache for projects data
 let projectsCache = null;
@@ -669,7 +702,7 @@ app.get("/projects/tag/:tagName", async (req, res) => {
 });
 
 // Manual cache refresh endpoint (for administrative purposes)
-app.post("/admin/refresh-cache", async (req, res) => {
+app.get("/admin/refresh-cache", authenticateAdmin, async (req, res) => {
   try {
     if (isUpdatingCache) {
       return res.status(429).json({
@@ -705,7 +738,7 @@ app.post("/admin/refresh-cache", async (req, res) => {
 });
 
 // Cache status endpoint
-app.get("/admin/cache-status", (req, res) => {
+app.get("/admin/cache-status", authenticateAdmin, (req, res) => {
   const cacheAge = lastCacheUpdate ? Date.now() - lastCacheUpdate : null;
   const isStale = isCacheStale();
 
