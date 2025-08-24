@@ -30,6 +30,7 @@ let projectsCache = null;
 let lastCacheUpdate = null;
 let isUpdatingCache = false;
 const CACHE_FILE = "projects-cache.json";
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes in milliseconds
 
 // Function to get image dimensions from URL
 async function getImageDimensions(url) {
@@ -435,18 +436,26 @@ function filterProjectsByTag(projects, tagName) {
   });
 }
 
-// Function to update cache in background
+// Function to check if cache is stale
+function isCacheStale() {
+  if (!lastCacheUpdate) return true;
+  return Date.now() - lastCacheUpdate > CACHE_TTL;
+}
+
+// Function to update cache in background (only if stale)
 async function updateCacheInBackground() {
-  if (isUpdatingCache) {
-    return; // Already updating
+  if (isUpdatingCache || !isCacheStale()) {
+    return; // Already updating or cache is still fresh
   }
 
+  console.log("Cache is stale, updating in background...");
   isUpdatingCache = true;
   try {
     const newProjects = await fetchProjectsFromRemote();
     projectsCache = newProjects;
     lastCacheUpdate = Date.now();
     saveCacheToFile(); // Save to file after updating
+    console.log("Cache updated successfully");
   } catch (error) {
     console.error("Error updating cache:", error);
   } finally {
@@ -657,6 +666,62 @@ app.get("/projects/tag/:tagName", async (req, res) => {
       res.status(500).json({ error: "Failed to read projects" });
     }
   }
+});
+
+// Manual cache refresh endpoint (for administrative purposes)
+app.post("/admin/refresh-cache", async (req, res) => {
+  try {
+    if (isUpdatingCache) {
+      return res.status(429).json({
+        error: "Cache update already in progress",
+        message: "Please wait for the current update to complete"
+      });
+    }
+
+    console.log("Manual cache refresh requested");
+    isUpdatingCache = true;
+
+    const newProjects = await fetchProjectsFromRemote();
+    projectsCache = newProjects;
+    lastCacheUpdate = Date.now();
+    saveCacheToFile();
+
+    console.log("Manual cache refresh completed successfully");
+    res.json({
+      success: true,
+      message: "Cache refreshed successfully",
+      projectCount: newProjects.length,
+      timestamp: new Date(lastCacheUpdate).toISOString()
+    });
+  } catch (error) {
+    console.error("Error during manual cache refresh:", error);
+    res.status(500).json({
+      error: "Failed to refresh cache",
+      message: error.message
+    });
+  } finally {
+    isUpdatingCache = false;
+  }
+});
+
+// Cache status endpoint
+app.get("/admin/cache-status", (req, res) => {
+  const cacheAge = lastCacheUpdate ? Date.now() - lastCacheUpdate : null;
+  const isStale = isCacheStale();
+
+  res.json({
+    hasCachedData: !!projectsCache,
+    projectCount: projectsCache ? projectsCache.length : 0,
+    lastUpdate: lastCacheUpdate
+      ? new Date(lastCacheUpdate).toISOString()
+      : null,
+    cacheAgeMs: cacheAge,
+    cacheAgeMinutes: cacheAge ? Math.round(cacheAge / 60000) : null,
+    isStale,
+    isUpdating: isUpdatingCache,
+    ttlMs: CACHE_TTL,
+    ttlMinutes: CACHE_TTL / 60000
+  });
 });
 
 // Prerender route for social media crawlers
