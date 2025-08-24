@@ -381,6 +381,21 @@ function loadCacheFromFile() {
   return false;
 }
 
+// Function to filter projects by person name
+function filterProjectsByPerson(projects, personName) {
+  const lowerPersonName = personName.toLowerCase();
+  return projects.filter((project) => {
+    // Check credits array only
+    if (project.credits && Array.isArray(project.credits)) {
+      return project.credits.some(
+        (credit) => credit.name && credit.name.toLowerCase() === lowerPersonName
+      );
+    }
+
+    return false;
+  });
+}
+
 // Function to update cache in background
 async function updateCacheInBackground() {
   if (isUpdatingCache) {
@@ -472,6 +487,48 @@ app.get("/projects/:projectId", async (req, res) => {
       }
     } else {
       res.status(500).json({ error: "Failed to read project" });
+    }
+  }
+});
+
+// Get projects by person/author
+app.get("/projects/person/:personName", async (req, res) => {
+  try {
+    const { personName } = req.params;
+
+    // Always serve from cache if available
+    if (projectsCache) {
+      const personProjects = filterProjectsByPerson(projectsCache, personName);
+      res.json(sortProjectsByDate(personProjects));
+
+      // Always update cache in background
+      updateCacheInBackground();
+    } else {
+      // No cache available - fetch fresh data
+      const projects = await fetchProjectsFromRemote();
+      projectsCache = projects;
+      lastCacheUpdate = Date.now();
+      saveCacheToFile(); // Save to file after updating
+
+      // Filter projects by person
+      const personProjects = filterProjectsByPerson(projects, personName);
+      res.json(sortProjectsByDate(personProjects));
+    }
+  } catch (error) {
+    console.error(
+      `Error reading projects for person ${req.params.personName}:`,
+      error
+    );
+
+    // If we have cache, serve it as fallback
+    if (projectsCache) {
+      const personProjects = filterProjectsByPerson(
+        projectsCache,
+        req.params.personName
+      );
+      res.json(sortProjectsByDate(personProjects));
+    } else {
+      res.status(500).json({ error: "Failed to read projects" });
     }
   }
 });
