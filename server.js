@@ -385,12 +385,32 @@ async function fetchProjectsFromRemote() {
                   dimensions
                 });
               } else if (ext === ".md") {
-                // This is a Markdown file - add as notes type
-                allMedia.push({
-                  url,
-                  type: "notes",
-                  filename
-                });
+                // This is a Markdown file - fetch content and add as notes type
+                try {
+                  const mdResponse = await fetch(url);
+                  let content = "";
+                  if (mdResponse.ok) {
+                    content = await mdResponse.text();
+                  }
+                  allMedia.push({
+                    url,
+                    type: "notes",
+                    filename,
+                    content
+                  });
+                } catch (error) {
+                  console.warn(
+                    `Could not fetch markdown content for ${filename}:`,
+                    error.message
+                  );
+                  // Still add the file but without content
+                  allMedia.push({
+                    url,
+                    type: "notes",
+                    filename,
+                    content: ""
+                  });
+                }
               }
             }
 
