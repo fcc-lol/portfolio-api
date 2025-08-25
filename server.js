@@ -342,17 +342,19 @@ async function fetchProjectsFromRemote() {
                   ".mp4",
                   ".mov",
                   ".avi",
-                  ".webm"
+                  ".webm",
+                  ".md"
                 ].includes(ext)
               ) {
                 mediaFiles.push(filename);
 
-                // Separate images from videos
+                // Separate images from videos and Markdown files
                 if ([".jpg", ".jpeg", ".png", ".gif"].includes(ext)) {
                   imageFiles.push(filename);
-                } else {
+                } else if ([".mp4", ".mov", ".avi", ".webm"].includes(ext)) {
                   videoFiles.push(filename);
                 }
+                // Markdown files will be handled separately in the processing loop
               }
             }
 
@@ -373,7 +375,7 @@ async function fetchProjectsFromRemote() {
                   filename,
                   dimensions
                 });
-              } else {
+              } else if ([".mp4", ".mov", ".avi", ".webm"].includes(ext)) {
                 // This is a video - get dimensions
                 const dimensions = await getVideoDimensions(url);
                 allMedia.push({
@@ -381,6 +383,13 @@ async function fetchProjectsFromRemote() {
                   type: "video",
                   filename,
                   dimensions
+                });
+              } else if (ext === ".md") {
+                // This is a Markdown file - add as notes type
+                allMedia.push({
+                  url,
+                  type: "notes",
+                  filename
                 });
               }
             }
