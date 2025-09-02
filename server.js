@@ -510,14 +510,6 @@ function loadCacheFromFile() {
   return false;
 }
 
-// Function to remove media array from projects (keep only primaryImage)
-function removeMediaFromProjects(projects) {
-  return projects.map((project) => {
-    const { media, ...projectWithoutMedia } = project;
-    return projectWithoutMedia;
-  });
-}
-
 // Function to filter projects by person name
 function filterProjectsByPerson(projects, personName) {
   const lowerPersonName = personName.toLowerCase();
@@ -675,9 +667,7 @@ app.get("/projects/person/:personName", async (req, res) => {
     // Always serve from cache if available
     if (projectsCache) {
       const personProjects = filterProjectsByPerson(projectsCache, personName);
-      const personProjectsWithoutMedia =
-        removeMediaFromProjects(personProjects);
-      res.json(sortProjectsByDate(personProjectsWithoutMedia));
+      res.json(sortProjectsByDate(personProjects));
 
       // Always update cache in background
       updateCacheInBackground();
@@ -690,9 +680,7 @@ app.get("/projects/person/:personName", async (req, res) => {
 
       // Filter projects by person
       const personProjects = filterProjectsByPerson(projects, personName);
-      const personProjectsWithoutMedia =
-        removeMediaFromProjects(personProjects);
-      res.json(sortProjectsByDate(personProjectsWithoutMedia));
+      res.json(sortProjectsByDate(personProjects));
     }
   } catch (error) {
     console.error(
@@ -706,9 +694,7 @@ app.get("/projects/person/:personName", async (req, res) => {
         projectsCache,
         req.params.personName
       );
-      const personProjectsWithoutMedia =
-        removeMediaFromProjects(personProjects);
-      res.json(sortProjectsByDate(personProjectsWithoutMedia));
+      res.json(sortProjectsByDate(personProjects));
     } else {
       res.status(500).json({ error: "Failed to read projects" });
     }
@@ -756,8 +742,7 @@ app.get("/projects/tag/:tagName", async (req, res) => {
     // Always serve from cache if available
     if (projectsCache) {
       const tagProjects = filterProjectsByTag(projectsCache, tagName);
-      const tagProjectsWithoutMedia = removeMediaFromProjects(tagProjects);
-      res.json(sortProjectsByDate(tagProjectsWithoutMedia));
+      res.json(sortProjectsByDate(tagProjects));
 
       // Always update cache in background
       updateCacheInBackground();
@@ -770,8 +755,7 @@ app.get("/projects/tag/:tagName", async (req, res) => {
 
       // Filter projects by tag
       const tagProjects = filterProjectsByTag(projects, tagName);
-      const tagProjectsWithoutMedia = removeMediaFromProjects(tagProjects);
-      res.json(sortProjectsByDate(tagProjectsWithoutMedia));
+      res.json(sortProjectsByDate(tagProjects));
     }
   } catch (error) {
     console.error(
@@ -785,8 +769,7 @@ app.get("/projects/tag/:tagName", async (req, res) => {
         projectsCache,
         req.params.tagName
       );
-      const tagProjectsWithoutMedia = removeMediaFromProjects(tagProjects);
-      res.json(sortProjectsByDate(tagProjectsWithoutMedia));
+      res.json(sortProjectsByDate(tagProjects));
     } else {
       res.status(500).json({ error: "Failed to read projects" });
     }
