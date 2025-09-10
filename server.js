@@ -173,7 +173,7 @@ function generatePageHtml(project, projectId) {
     description,
     shareImageUrl,
     projectUrl,
-    `/projects/${projectId}`
+    `/project/${projectId}`
   );
 }
 
