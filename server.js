@@ -537,6 +537,8 @@ function getShareImageCachePath(type, identifier = null) {
     return path.join(SHARE_IMAGE_CACHE_DIR, `tag-${identifier}.jpg`);
   } else if (type === "person") {
     return path.join(SHARE_IMAGE_CACHE_DIR, `person-${identifier}.jpg`);
+  } else if (type === "space") {
+    return path.join(SHARE_IMAGE_CACHE_DIR, "space.jpg");
   }
   return null;
 }
@@ -594,6 +596,47 @@ function clearShareImageCache() {
     }
   } catch (error) {
     console.error("Error clearing share image cache:", error);
+  }
+}
+
+// Function to get the first studio photo
+async function getFirstStudioPhoto() {
+  try {
+    const studioPhotosUrl = "https://static.fcc.lol/studio-photos/";
+    const response = await fetch(studioPhotosUrl);
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch studio photos directory: ${response.status}`
+      );
+    }
+
+    const html = await response.text();
+
+    // Parse the HTML to extract image files
+    const imageRegex = /<a href="([^"]+\.(jpg|jpeg|png|gif))">/gi;
+    const images = [];
+    let match;
+
+    while ((match = imageRegex.exec(html)) !== null) {
+      const filename = match[1];
+      // Skip parent directory links
+      if (filename !== "../" && filename !== "./") {
+        images.push(filename);
+      }
+    }
+
+    // Sort images and return the first one
+    if (images.length > 0) {
+      const sortedImages = images.sort();
+      const firstImage = sortedImages[0];
+      return `${studioPhotosUrl}${firstImage}`;
+    }
+
+    return null;
+  } catch (error) {
+    console.error("Error fetching studio photos:", error);
+    return null;
   }
 }
 
@@ -1055,6 +1098,56 @@ app.get("/projects/prerender/person/:personName", async (req, res) => {
     updateCacheInBackground();
   } catch (error) {
     console.error("Error prerendering person page:", error);
+    res.status(500).send("Internal server error");
+  }
+});
+
+// Space page prerender route for social media crawlers
+app.get("/space/prerender", async (req, res) => {
+  try {
+    const title = "FCC Studio – Space";
+    const description = "Visit our creative space and studio.";
+    const shareImageUrl = `${API_URL}/space/share-image`;
+    const spaceUrl = `${BASE_URL}/space`;
+
+    const html = generateHtml(
+      title,
+      description,
+      shareImageUrl,
+      spaceUrl,
+      "/space"
+    );
+
+    // Set content type and send HTML
+    res.set("Content-Type", "text/html");
+    res.send(html);
+  } catch (error) {
+    console.error("Error prerendering space page:", error);
+    res.status(500).send("Internal server error");
+  }
+});
+
+// About page prerender route for social media crawlers
+app.get("/about/prerender", async (req, res) => {
+  try {
+    const title = "FCC Studio – About";
+    const description = SITE_DESCRIPTION;
+    const shareImageUrl = `${API_URL}/homepage/share-image`;
+    const aboutUrl = `${BASE_URL}/about`;
+
+    const html = generateHtml(
+      title,
+      description,
+      shareImageUrl,
+      aboutUrl,
+      "/about"
+    );
+
+    // Set content type and send HTML
+    res.set("Content-Type", "text/html");
+    res.send(html);
+  } catch (error) {
+    console.error("Error prerendering about page:", error);
     res.status(500).send("Internal server error");
   }
 });
@@ -1538,6 +1631,85 @@ app.get("/person/:personName/share-image", async (req, res) => {
     res.send(outputBuffer);
   } catch (error) {
     console.error("Error generating person share image:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Space page share image endpoint
+app.get("/space/share-image", async (req, res) => {
+  try {
+    // Check if we have a valid cached version
+    const cachePath = getShareImageCachePath("space");
+    if (isShareImageCacheValid(cachePath)) {
+      const cachedImage = loadShareImageFromCache(cachePath);
+      if (cachedImage) {
+        console.log("Serving cached space share image");
+        res.set({
+          "Content-Type": "image/jpeg",
+          "Content-Length": cachedImage.length,
+          "Cache-Control": "public, max-age=3600", // Cache for 1 hour
+          "Content-Disposition": `inline; filename="space-share.jpg"`
+        });
+        return res.send(cachedImage);
+      }
+    }
+
+    console.log("Generating new space share image");
+
+    // Get the first studio photo
+    const studioPhotoUrl = await getFirstStudioPhoto();
+    if (!studioPhotoUrl) {
+      return res.status(400).json({ error: "No studio photos found" });
+    }
+
+    // Download and process the image
+    let imageBuffer;
+    try {
+      const response = await fetch(studioPhotoUrl);
+      if (response.ok) {
+        const arrayBuffer = await response.arrayBuffer();
+        imageBuffer = Buffer.from(arrayBuffer);
+      }
+    } catch (error) {
+      console.error(
+        `[DEBUG] Error processing studio photo ${studioPhotoUrl}:`,
+        error
+      );
+      return res.status(500).json({ error: "Failed to process studio photo" });
+    }
+
+    if (!imageBuffer) {
+      return res.status(400).json({ error: "No valid studio photo found" });
+    }
+
+    // Resize image to standard share image dimensions
+    const canvasWidth = 1200;
+    const canvasHeight = 630;
+
+    const outputBuffer = await sharp(imageBuffer)
+      .resize(canvasWidth, canvasHeight, {
+        fit: "cover",
+        position: "center",
+        withoutEnlargement: false
+      })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+
+    // Cache the generated image
+    saveShareImageToCache(cachePath, outputBuffer);
+
+    // Set headers to serve the image directly
+    res.set({
+      "Content-Type": "image/jpeg",
+      "Content-Length": outputBuffer.length,
+      "Cache-Control": "public, max-age=3600", // Cache for 1 hour
+      "Content-Disposition": `inline; filename="space-share.jpg"`
+    });
+
+    // Send the image buffer directly
+    res.send(outputBuffer);
+  } catch (error) {
+    console.error("Error generating space share image:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
