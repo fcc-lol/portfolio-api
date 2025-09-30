@@ -611,6 +611,26 @@ app.get("/projects", async (req, res) => {
   }
 });
 
+// Homepage prerender route for social media crawlers
+app.get("/homepage/prerender", async (req, res) => {
+  try {
+    // Generate HTML with proper meta tags for homepage
+    const html = generateHomepageHtml();
+
+    // Set content type and send HTML
+    res.set("Content-Type", "text/html");
+    res.send(html);
+
+    // Update cache in background if needed
+    if (projectsCache) {
+      updateCacheInBackground();
+    }
+  } catch (error) {
+    console.error("Error prerendering homepage:", error);
+    res.status(500).send("Internal server error");
+  }
+});
+
 app.get("/projects/:projectId", async (req, res) => {
   try {
     const { projectId } = req.params;
@@ -829,26 +849,6 @@ app.get("/admin/cache-status", authenticateAdmin, (req, res) => {
     ttlMs: CACHE_TTL,
     ttlMinutes: CACHE_TTL / 60000
   });
-});
-
-// Homepage prerender route for social media crawlers (must come before parameterized routes)
-app.get("/projects/prerender", async (req, res) => {
-  try {
-    // Generate HTML with proper meta tags for homepage
-    const html = generateHomepageHtml();
-
-    // Set content type and send HTML
-    res.set("Content-Type", "text/html");
-    res.send(html);
-
-    // Update cache in background if needed
-    if (projectsCache) {
-      updateCacheInBackground();
-    }
-  } catch (error) {
-    console.error("Error prerendering homepage:", error);
-    res.status(500).send("Internal server error");
-  }
 });
 
 // Prerender route for social media crawlers
