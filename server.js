@@ -66,6 +66,14 @@ let isUpdatingCache = false;
 const CACHE_FILE = "projects-cache.json";
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes in milliseconds
 
+// Cache for share images
+let shareImageCache = {
+  homepage: null,
+  tags: {},
+  persons: {}
+};
+const SHARE_IMAGE_CACHE_DIR = "share-images";
+
 // Function to get image dimensions from URL
 async function getImageDimensions(url) {
   try {
@@ -178,7 +186,7 @@ function generatePageHtml(project, projectId) {
 
 // Helper function to generate HTML for homepage
 function generateHomepageHtml() {
-  const title = "FCC Studio – Projects";
+  const title = "FCC Studio";
   const shareImageUrl = `${API_URL}/homepage/share-image`;
 
   return generateHtml(title, SITE_DESCRIPTION, shareImageUrl, BASE_URL, "/");
@@ -509,6 +517,86 @@ function loadCacheFromFile() {
   return false;
 }
 
+// Function to ensure share image cache directory exists
+function ensureShareImageCacheDir() {
+  try {
+    if (!fs.existsSync(SHARE_IMAGE_CACHE_DIR)) {
+      fs.mkdirSync(SHARE_IMAGE_CACHE_DIR, { recursive: true });
+    }
+  } catch (error) {
+    console.error("Error creating share image cache directory:", error);
+  }
+}
+
+// Function to get share image cache file path
+function getShareImageCachePath(type, identifier = null) {
+  ensureShareImageCacheDir();
+  if (type === "homepage") {
+    return path.join(SHARE_IMAGE_CACHE_DIR, "homepage.jpg");
+  } else if (type === "tag") {
+    return path.join(SHARE_IMAGE_CACHE_DIR, `tag-${identifier}.jpg`);
+  } else if (type === "person") {
+    return path.join(SHARE_IMAGE_CACHE_DIR, `person-${identifier}.jpg`);
+  }
+  return null;
+}
+
+// Function to check if share image cache is valid
+function isShareImageCacheValid(cachePath) {
+  try {
+    if (!fs.existsSync(cachePath)) {
+      return false;
+    }
+
+    // Check if the cache file is newer than the last projects cache update
+    const cacheStats = fs.statSync(cachePath);
+    const cacheTime = cacheStats.mtime.getTime();
+
+    return lastCacheUpdate && cacheTime > lastCacheUpdate;
+  } catch (error) {
+    console.error("Error checking share image cache validity:", error);
+    return false;
+  }
+}
+
+// Function to save share image to cache
+function saveShareImageToCache(cachePath, imageBuffer) {
+  try {
+    ensureShareImageCacheDir();
+    fs.writeFileSync(cachePath, imageBuffer);
+    console.log(`Share image cached: ${cachePath}`);
+  } catch (error) {
+    console.error("Error saving share image to cache:", error);
+  }
+}
+
+// Function to load share image from cache
+function loadShareImageFromCache(cachePath) {
+  try {
+    if (fs.existsSync(cachePath)) {
+      return fs.readFileSync(cachePath);
+    }
+  } catch (error) {
+    console.error("Error loading share image from cache:", error);
+  }
+  return null;
+}
+
+// Function to clear all share image cache
+function clearShareImageCache() {
+  try {
+    if (fs.existsSync(SHARE_IMAGE_CACHE_DIR)) {
+      const files = fs.readdirSync(SHARE_IMAGE_CACHE_DIR);
+      for (const file of files) {
+        fs.unlinkSync(path.join(SHARE_IMAGE_CACHE_DIR, file));
+      }
+      console.log("Share image cache cleared");
+    }
+  } catch (error) {
+    console.error("Error clearing share image cache:", error);
+  }
+}
+
 // Function to filter projects by person name
 function filterProjectsByPerson(projects, personName) {
   const lowerPersonName = personName.toLowerCase();
@@ -574,6 +662,10 @@ async function updateCacheInBackground() {
     projectsCache = newProjects;
     lastCacheUpdate = Date.now();
     saveCacheToFile(); // Save to file after updating
+
+    // Clear share image cache since projects data has changed
+    clearShareImageCache();
+
     console.log("Cache updated successfully");
   } catch (error) {
     console.error("Error updating cache:", error);
@@ -813,6 +905,9 @@ app.get("/admin/refresh-cache", authenticateAdmin, async (req, res) => {
     lastCacheUpdate = Date.now();
     saveCacheToFile();
 
+    // Clear share image cache since projects data has changed
+    clearShareImageCache();
+
     console.log("Manual cache refresh completed successfully");
     res.json({
       success: true,
@@ -1045,10 +1140,28 @@ app.get("/projects/:projectId/share-image", async (req, res) => {
 // Homepage share image endpoint
 app.get("/homepage/share-image", async (req, res) => {
   try {
+    // Check if we have a valid cached version
+    const cachePath = getShareImageCachePath("homepage");
+    if (isShareImageCacheValid(cachePath)) {
+      const cachedImage = loadShareImageFromCache(cachePath);
+      if (cachedImage) {
+        console.log("Serving cached homepage share image");
+        res.set({
+          "Content-Type": "image/jpeg",
+          "Content-Length": cachedImage.length,
+          "Cache-Control": "public, max-age=3600", // Cache for 1 hour
+          "Content-Disposition": `inline; filename="homepage-share.jpg"`
+        });
+        return res.send(cachedImage);
+      }
+    }
+
     // Get projects from cache
     if (!projectsCache) {
       return res.status(400).json({ error: "No projects data available" });
     }
+
+    console.log("Generating new homepage share image");
 
     // Get sorted projects and extract primary images (up to 6 for 3x2 grid)
     const sortedProjects = sortProjectsByDate(projectsCache);
@@ -1138,13 +1251,14 @@ app.get("/homepage/share-image", async (req, res) => {
     // Generate final image
     const outputBuffer = await composite.jpeg({ quality: 85 }).toBuffer();
 
+    // Cache the generated image
+    saveShareImageToCache(cachePath, outputBuffer);
+
     // Set headers to serve the image directly
     res.set({
       "Content-Type": "image/jpeg",
       "Content-Length": outputBuffer.length,
-      "Cache-Control": "no-cache, no-store, must-revalidate",
-      Pragma: "no-cache",
-      Expires: "0",
+      "Cache-Control": "public, max-age=3600", // Cache for 1 hour
       "Content-Disposition": `inline; filename="homepage-share.jpg"`
     });
 
@@ -1161,10 +1275,28 @@ app.get("/tag/:tagName/share-image", async (req, res) => {
   try {
     const { tagName } = req.params;
 
+    // Check if we have a valid cached version
+    const cachePath = getShareImageCachePath("tag", tagName);
+    if (isShareImageCacheValid(cachePath)) {
+      const cachedImage = loadShareImageFromCache(cachePath);
+      if (cachedImage) {
+        console.log(`Serving cached tag share image for: ${tagName}`);
+        res.set({
+          "Content-Type": "image/jpeg",
+          "Content-Length": cachedImage.length,
+          "Cache-Control": "public, max-age=3600", // Cache for 1 hour
+          "Content-Disposition": `inline; filename="${tagName}-share.jpg"`
+        });
+        return res.send(cachedImage);
+      }
+    }
+
     // Get projects from cache
     if (!projectsCache) {
       return res.status(400).json({ error: "No projects data available" });
     }
+
+    console.log(`Generating new tag share image for: ${tagName}`);
 
     // Filter projects by tag and extract primary images
     const tagProjects = filterProjectsByTag(projectsCache, tagName);
@@ -1255,13 +1387,14 @@ app.get("/tag/:tagName/share-image", async (req, res) => {
     // Generate final image
     const outputBuffer = await composite.jpeg({ quality: 85 }).toBuffer();
 
+    // Cache the generated image
+    saveShareImageToCache(cachePath, outputBuffer);
+
     // Set headers to serve the image directly
     res.set({
       "Content-Type": "image/jpeg",
       "Content-Length": outputBuffer.length,
-      "Cache-Control": "no-cache, no-store, must-revalidate",
-      Pragma: "no-cache",
-      Expires: "0",
+      "Cache-Control": "public, max-age=3600", // Cache for 1 hour
       "Content-Disposition": `inline; filename="${tagName}-share.jpg"`
     });
 
@@ -1278,10 +1411,28 @@ app.get("/person/:personName/share-image", async (req, res) => {
   try {
     const { personName } = req.params;
 
+    // Check if we have a valid cached version
+    const cachePath = getShareImageCachePath("person", personName);
+    if (isShareImageCacheValid(cachePath)) {
+      const cachedImage = loadShareImageFromCache(cachePath);
+      if (cachedImage) {
+        console.log(`Serving cached person share image for: ${personName}`);
+        res.set({
+          "Content-Type": "image/jpeg",
+          "Content-Length": cachedImage.length,
+          "Cache-Control": "public, max-age=3600", // Cache for 1 hour
+          "Content-Disposition": `inline; filename="${personName}-share.jpg"`
+        });
+        return res.send(cachedImage);
+      }
+    }
+
     // Get projects from cache
     if (!projectsCache) {
       return res.status(400).json({ error: "No projects data available" });
     }
+
+    console.log(`Generating new person share image for: ${personName}`);
 
     // Filter projects by person and extract primary images
     const personProjects = filterProjectsByPerson(projectsCache, personName);
@@ -1372,13 +1523,14 @@ app.get("/person/:personName/share-image", async (req, res) => {
     // Generate final image
     const outputBuffer = await composite.jpeg({ quality: 85 }).toBuffer();
 
+    // Cache the generated image
+    saveShareImageToCache(cachePath, outputBuffer);
+
     // Set headers to serve the image directly
     res.set({
       "Content-Type": "image/jpeg",
       "Content-Length": outputBuffer.length,
-      "Cache-Control": "no-cache, no-store, must-revalidate",
-      Pragma: "no-cache",
-      Expires: "0",
+      "Cache-Control": "public, max-age=3600", // Cache for 1 hour
       "Content-Disposition": `inline; filename="${personName}-share.jpg"`
     });
 
