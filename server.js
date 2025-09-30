@@ -164,8 +164,7 @@ function generateHtml(
 function generatePageHtml(project, projectId) {
   const title = project.title || project.name || "Untitled Project";
   const description = project.description || SITE_DESCRIPTION;
-  const shareImageUrl =
-    project.primaryImage?.url || `${API_URL}/projects/${projectId}/share-image`;
+  const shareImageUrl = project.primaryImage?.url;
   const projectUrl = `${BASE_URL}/${projectId}`;
 
   return generateHtml(
@@ -965,6 +964,84 @@ app.get("/projects/prerender/:projectId", async (req, res) => {
   }
 });
 
+// Individual project share image endpoint
+app.get("/projects/:projectId/share-image", async (req, res) => {
+  try {
+    const { projectId } = req.params;
+
+    // Get projects from cache
+    if (!projectsCache) {
+      return res.status(400).json({ error: "No projects data available" });
+    }
+
+    // Find the specific project
+    const project = projectsCache.find((p) => p.id === projectId);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+
+    // Use the project's primary image
+    if (!project.primaryImage?.url) {
+      return res
+        .status(400)
+        .json({ error: "No primary image found for this project" });
+    }
+
+    // Download and process the image
+    const baseUrl = "https://static.fcc.lol/portfolio-storage";
+    let imageBuffer;
+
+    try {
+      if (project.primaryImage.url.startsWith(baseUrl)) {
+        const response = await fetch(project.primaryImage.url);
+        if (response.ok) {
+          const arrayBuffer = await response.arrayBuffer();
+          imageBuffer = Buffer.from(arrayBuffer);
+        }
+      }
+    } catch (error) {
+      console.error(
+        `[DEBUG] Error processing image ${project.primaryImage.url}:`,
+        error
+      );
+      return res.status(500).json({ error: "Failed to process image" });
+    }
+
+    if (!imageBuffer) {
+      return res.status(400).json({ error: "No valid image found" });
+    }
+
+    // Resize image to standard share image dimensions
+    const canvasWidth = 1200;
+    const canvasHeight = 630;
+
+    const outputBuffer = await sharp(imageBuffer)
+      .resize(canvasWidth, canvasHeight, {
+        fit: "cover",
+        position: "center",
+        withoutEnlargement: false
+      })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+
+    // Set headers to serve the image directly
+    res.set({
+      "Content-Type": "image/jpeg",
+      "Content-Length": outputBuffer.length,
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+      "Content-Disposition": `inline; filename="${projectId}-share.jpg"`
+    });
+
+    // Send the image buffer directly
+    res.send(outputBuffer);
+  } catch (error) {
+    console.error("Error generating project share image:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // Homepage share image endpoint
 app.get("/homepage/share-image", async (req, res) => {
   try {
@@ -973,12 +1050,12 @@ app.get("/homepage/share-image", async (req, res) => {
       return res.status(400).json({ error: "No projects data available" });
     }
 
-    // Get sorted projects and extract primary images
+    // Get sorted projects and extract primary images (up to 6 for 3x2 grid)
     const sortedProjects = sortProjectsByDate(projectsCache);
     const images = [];
 
     for (const project of sortedProjects) {
-      if (project.primaryImage?.url && images.length < 4) {
+      if (project.primaryImage?.url && images.length < 6) {
         images.push(project.primaryImage.url);
       }
     }
@@ -995,12 +1072,7 @@ app.get("/homepage/share-image", async (req, res) => {
 
     for (const imageUrl of images) {
       try {
-        let imagePath;
-
         if (imageUrl.startsWith(baseUrl)) {
-          // Extract the relative path from the full URL
-          const relativePath = imageUrl.replace(baseUrl + "/", "");
-          // For homepage, we'll fetch from remote URLs directly
           const response = await fetch(imageUrl);
           if (response.ok) {
             const arrayBuffer = await response.arrayBuffer();
@@ -1017,140 +1089,51 @@ app.get("/homepage/share-image", async (req, res) => {
       return res.status(400).json({ error: "No valid images found" });
     }
 
-    // Create composite image based on number of images
+    // Create 3x2 grid composite image
     let composite;
     const canvasWidth = 1200;
     const canvasHeight = 630;
+    const cellWidth = canvasWidth / 3;
+    const cellHeight = canvasHeight / 2;
 
-    if (imageBuffers.length === 1) {
-      // Single image - resize to fill canvas
-      composite = sharp(imageBuffers[0]).resize(canvasWidth, canvasHeight, {
-        fit: "cover",
-        position: "center",
-        withoutEnlargement: false
-      });
-    } else if (imageBuffers.length === 2) {
-      // Two images - split vertically
-      const halfWidth = canvasWidth / 2;
-      const [img1, img2] = await Promise.all([
-        sharp(imageBuffers[0])
-          .resize(halfWidth, canvasHeight, {
+    // Prepare all images for the grid
+    const processedImages = await Promise.all(
+      imageBuffers.slice(0, 6).map(async (buffer, index) => {
+        return await sharp(buffer)
+          .resize(cellWidth, cellHeight, {
             fit: "cover",
             position: "center",
             withoutEnlargement: false
           })
-          .toBuffer(),
-        sharp(imageBuffers[1])
-          .resize(halfWidth, canvasHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer()
-      ]);
+          .toBuffer();
+      })
+    );
 
-      composite = sharp({
-        create: {
-          width: canvasWidth,
-          height: canvasHeight,
-          channels: 3,
-          background: { r: 255, g: 255, b: 255 }
+    // Create composite with 3x2 grid layout
+    const compositeInputs = [];
+
+    // Fill the grid row by row
+    for (let row = 0; row < 2; row++) {
+      for (let col = 0; col < 3; col++) {
+        const imageIndex = row * 3 + col;
+        if (imageIndex < processedImages.length) {
+          compositeInputs.push({
+            input: processedImages[imageIndex],
+            left: col * cellWidth,
+            top: row * cellHeight
+          });
         }
-      }).composite([
-        { input: img1, left: 0, top: 0 },
-        { input: img2, left: halfWidth, top: 0 }
-      ]);
-    } else if (imageBuffers.length === 3) {
-      // Three images - one large on left, two stacked on right
-      const halfWidth = canvasWidth / 2;
-      const halfHeight = canvasHeight / 2;
-
-      const [img1, img2, img3] = await Promise.all([
-        sharp(imageBuffers[0])
-          .resize(halfWidth, canvasHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer(),
-        sharp(imageBuffers[1])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer(),
-        sharp(imageBuffers[2])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer()
-      ]);
-
-      composite = sharp({
-        create: {
-          width: canvasWidth,
-          height: canvasHeight,
-          channels: 3,
-          background: { r: 255, g: 255, b: 255 }
-        }
-      }).composite([
-        { input: img1, left: 0, top: 0 },
-        { input: img2, left: halfWidth, top: 0 },
-        { input: img3, left: halfWidth, top: halfHeight }
-      ]);
-    } else {
-      // Four or more images - 2x2 grid
-      const halfWidth = canvasWidth / 2;
-      const halfHeight = canvasHeight / 2;
-
-      const [img1, img2, img3, img4] = await Promise.all([
-        sharp(imageBuffers[0])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer(),
-        sharp(imageBuffers[1])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer(),
-        sharp(imageBuffers[2])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer(),
-        sharp(imageBuffers[3])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer()
-      ]);
-
-      composite = sharp({
-        create: {
-          width: canvasWidth,
-          height: canvasHeight,
-          channels: 3,
-          background: { r: 255, g: 255, b: 255 }
-        }
-      }).composite([
-        { input: img1, left: 0, top: 0 },
-        { input: img2, left: halfWidth, top: 0 },
-        { input: img3, left: 0, top: halfHeight },
-        { input: img4, left: halfWidth, top: halfHeight }
-      ]);
+      }
     }
+
+    composite = sharp({
+      create: {
+        width: canvasWidth,
+        height: canvasHeight,
+        channels: 3,
+        background: { r: 255, g: 255, b: 255 }
+      }
+    }).composite(compositeInputs);
 
     // Generate final image
     const outputBuffer = await composite.jpeg({ quality: 85 }).toBuffer();
@@ -1189,7 +1172,7 @@ app.get("/tag/:tagName/share-image", async (req, res) => {
     const images = [];
 
     for (const project of sortedProjects) {
-      if (project.primaryImage?.url && images.length < 4) {
+      if (project.primaryImage?.url && images.length < 6) {
         images.push(project.primaryImage.url);
       }
     }
@@ -1223,136 +1206,51 @@ app.get("/tag/:tagName/share-image", async (req, res) => {
       return res.status(400).json({ error: "No valid images found" });
     }
 
-    // Create composite image based on number of images (same logic as homepage)
+    // Create 3x2 grid composite image
     let composite;
     const canvasWidth = 1200;
     const canvasHeight = 630;
+    const cellWidth = canvasWidth / 3;
+    const cellHeight = canvasHeight / 2;
 
-    if (imageBuffers.length === 1) {
-      composite = sharp(imageBuffers[0]).resize(canvasWidth, canvasHeight, {
-        fit: "cover",
-        position: "center",
-        withoutEnlargement: false
-      });
-    } else if (imageBuffers.length === 2) {
-      const halfWidth = canvasWidth / 2;
-      const [img1, img2] = await Promise.all([
-        sharp(imageBuffers[0])
-          .resize(halfWidth, canvasHeight, {
+    // Prepare all images for the grid
+    const processedImages = await Promise.all(
+      imageBuffers.slice(0, 6).map(async (buffer, index) => {
+        return await sharp(buffer)
+          .resize(cellWidth, cellHeight, {
             fit: "cover",
             position: "center",
             withoutEnlargement: false
           })
-          .toBuffer(),
-        sharp(imageBuffers[1])
-          .resize(halfWidth, canvasHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer()
-      ]);
+          .toBuffer();
+      })
+    );
 
-      composite = sharp({
-        create: {
-          width: canvasWidth,
-          height: canvasHeight,
-          channels: 3,
-          background: { r: 255, g: 255, b: 255 }
+    // Create composite with 3x2 grid layout
+    const compositeInputs = [];
+
+    // Fill the grid row by row
+    for (let row = 0; row < 2; row++) {
+      for (let col = 0; col < 3; col++) {
+        const imageIndex = row * 3 + col;
+        if (imageIndex < processedImages.length) {
+          compositeInputs.push({
+            input: processedImages[imageIndex],
+            left: col * cellWidth,
+            top: row * cellHeight
+          });
         }
-      }).composite([
-        { input: img1, left: 0, top: 0 },
-        { input: img2, left: halfWidth, top: 0 }
-      ]);
-    } else if (imageBuffers.length === 3) {
-      const halfWidth = canvasWidth / 2;
-      const halfHeight = canvasHeight / 2;
-
-      const [img1, img2, img3] = await Promise.all([
-        sharp(imageBuffers[0])
-          .resize(halfWidth, canvasHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer(),
-        sharp(imageBuffers[1])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer(),
-        sharp(imageBuffers[2])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer()
-      ]);
-
-      composite = sharp({
-        create: {
-          width: canvasWidth,
-          height: canvasHeight,
-          channels: 3,
-          background: { r: 255, g: 255, b: 255 }
-        }
-      }).composite([
-        { input: img1, left: 0, top: 0 },
-        { input: img2, left: halfWidth, top: 0 },
-        { input: img3, left: halfWidth, top: halfHeight }
-      ]);
-    } else {
-      const halfWidth = canvasWidth / 2;
-      const halfHeight = canvasHeight / 2;
-
-      const [img1, img2, img3, img4] = await Promise.all([
-        sharp(imageBuffers[0])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer(),
-        sharp(imageBuffers[1])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer(),
-        sharp(imageBuffers[2])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer(),
-        sharp(imageBuffers[3])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer()
-      ]);
-
-      composite = sharp({
-        create: {
-          width: canvasWidth,
-          height: canvasHeight,
-          channels: 3,
-          background: { r: 255, g: 255, b: 255 }
-        }
-      }).composite([
-        { input: img1, left: 0, top: 0 },
-        { input: img2, left: halfWidth, top: 0 },
-        { input: img3, left: 0, top: halfHeight },
-        { input: img4, left: halfWidth, top: halfHeight }
-      ]);
+      }
     }
+
+    composite = sharp({
+      create: {
+        width: canvasWidth,
+        height: canvasHeight,
+        channels: 3,
+        background: { r: 255, g: 255, b: 255 }
+      }
+    }).composite(compositeInputs);
 
     // Generate final image
     const outputBuffer = await composite.jpeg({ quality: 85 }).toBuffer();
@@ -1391,7 +1289,7 @@ app.get("/person/:personName/share-image", async (req, res) => {
     const images = [];
 
     for (const project of sortedProjects) {
-      if (project.primaryImage?.url && images.length < 4) {
+      if (project.primaryImage?.url && images.length < 6) {
         images.push(project.primaryImage.url);
       }
     }
@@ -1425,136 +1323,51 @@ app.get("/person/:personName/share-image", async (req, res) => {
       return res.status(400).json({ error: "No valid images found" });
     }
 
-    // Create composite image based on number of images (same logic as homepage)
+    // Create 3x2 grid composite image
     let composite;
     const canvasWidth = 1200;
     const canvasHeight = 630;
+    const cellWidth = canvasWidth / 3;
+    const cellHeight = canvasHeight / 2;
 
-    if (imageBuffers.length === 1) {
-      composite = sharp(imageBuffers[0]).resize(canvasWidth, canvasHeight, {
-        fit: "cover",
-        position: "center",
-        withoutEnlargement: false
-      });
-    } else if (imageBuffers.length === 2) {
-      const halfWidth = canvasWidth / 2;
-      const [img1, img2] = await Promise.all([
-        sharp(imageBuffers[0])
-          .resize(halfWidth, canvasHeight, {
+    // Prepare all images for the grid
+    const processedImages = await Promise.all(
+      imageBuffers.slice(0, 6).map(async (buffer, index) => {
+        return await sharp(buffer)
+          .resize(cellWidth, cellHeight, {
             fit: "cover",
             position: "center",
             withoutEnlargement: false
           })
-          .toBuffer(),
-        sharp(imageBuffers[1])
-          .resize(halfWidth, canvasHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer()
-      ]);
+          .toBuffer();
+      })
+    );
 
-      composite = sharp({
-        create: {
-          width: canvasWidth,
-          height: canvasHeight,
-          channels: 3,
-          background: { r: 255, g: 255, b: 255 }
+    // Create composite with 3x2 grid layout
+    const compositeInputs = [];
+
+    // Fill the grid row by row
+    for (let row = 0; row < 2; row++) {
+      for (let col = 0; col < 3; col++) {
+        const imageIndex = row * 3 + col;
+        if (imageIndex < processedImages.length) {
+          compositeInputs.push({
+            input: processedImages[imageIndex],
+            left: col * cellWidth,
+            top: row * cellHeight
+          });
         }
-      }).composite([
-        { input: img1, left: 0, top: 0 },
-        { input: img2, left: halfWidth, top: 0 }
-      ]);
-    } else if (imageBuffers.length === 3) {
-      const halfWidth = canvasWidth / 2;
-      const halfHeight = canvasHeight / 2;
-
-      const [img1, img2, img3] = await Promise.all([
-        sharp(imageBuffers[0])
-          .resize(halfWidth, canvasHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer(),
-        sharp(imageBuffers[1])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer(),
-        sharp(imageBuffers[2])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer()
-      ]);
-
-      composite = sharp({
-        create: {
-          width: canvasWidth,
-          height: canvasHeight,
-          channels: 3,
-          background: { r: 255, g: 255, b: 255 }
-        }
-      }).composite([
-        { input: img1, left: 0, top: 0 },
-        { input: img2, left: halfWidth, top: 0 },
-        { input: img3, left: halfWidth, top: halfHeight }
-      ]);
-    } else {
-      const halfWidth = canvasWidth / 2;
-      const halfHeight = canvasHeight / 2;
-
-      const [img1, img2, img3, img4] = await Promise.all([
-        sharp(imageBuffers[0])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer(),
-        sharp(imageBuffers[1])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer(),
-        sharp(imageBuffers[2])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer(),
-        sharp(imageBuffers[3])
-          .resize(halfWidth, halfHeight, {
-            fit: "cover",
-            position: "center",
-            withoutEnlargement: false
-          })
-          .toBuffer()
-      ]);
-
-      composite = sharp({
-        create: {
-          width: canvasWidth,
-          height: canvasHeight,
-          channels: 3,
-          background: { r: 255, g: 255, b: 255 }
-        }
-      }).composite([
-        { input: img1, left: 0, top: 0 },
-        { input: img2, left: halfWidth, top: 0 },
-        { input: img3, left: 0, top: halfHeight },
-        { input: img4, left: halfWidth, top: halfHeight }
-      ]);
+      }
     }
+
+    composite = sharp({
+      create: {
+        width: canvasWidth,
+        height: canvasHeight,
+        channels: 3,
+        background: { r: 255, g: 255, b: 255 }
+      }
+    }).composite(compositeInputs);
 
     // Generate final image
     const outputBuffer = await composite.jpeg({ quality: 85 }).toBuffer();
