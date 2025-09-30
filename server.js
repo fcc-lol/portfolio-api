@@ -831,7 +831,7 @@ app.get("/admin/cache-status", authenticateAdmin, (req, res) => {
   });
 });
 
-// Homepage prerender route for social media crawlers
+// Homepage prerender route for social media crawlers (must come before parameterized routes)
 app.get("/projects/prerender", async (req, res) => {
   try {
     // Generate HTML with proper meta tags for homepage
@@ -847,6 +847,53 @@ app.get("/projects/prerender", async (req, res) => {
     }
   } catch (error) {
     console.error("Error prerendering homepage:", error);
+    res.status(500).send("Internal server error");
+  }
+});
+
+// Prerender route for social media crawlers
+app.get("/projects/prerender/:projectId", async (req, res) => {
+  try {
+    const { projectId } = req.params;
+
+    // Always serve from cache if available
+    if (projectsCache) {
+      const project = projectsCache.find((p) => p.id === projectId);
+
+      if (project) {
+        // Generate HTML with proper meta tags
+        const html = generatePageHtml(project, projectId);
+
+        // Set content type and send HTML
+        res.set("Content-Type", "text/html");
+        res.send(html);
+      } else {
+        res.status(404).send("Project not found");
+      }
+
+      // Always update cache in background
+      updateCacheInBackground();
+    } else {
+      // No cache available - fetch fresh data
+      const projects = await fetchProjectsFromRemote();
+      projectsCache = projects;
+      lastCacheUpdate = Date.now();
+      saveCacheToFile(); // Save to file after updating
+
+      const project = projects.find((p) => p.id === projectId);
+      if (project) {
+        // Generate HTML with proper meta tags
+        const html = generatePageHtml(project, projectId);
+
+        // Set content type and send HTML
+        res.set("Content-Type", "text/html");
+        res.send(html);
+      } else {
+        res.status(404).send("Project not found");
+      }
+    }
+  } catch (error) {
+    console.error("Error prerendering project:", error);
     res.status(500).send("Internal server error");
   }
 });
@@ -913,53 +960,6 @@ app.get("/projects/prerender/person/:personName", async (req, res) => {
     updateCacheInBackground();
   } catch (error) {
     console.error("Error prerendering person page:", error);
-    res.status(500).send("Internal server error");
-  }
-});
-
-// Prerender route for social media crawlers
-app.get("/projects/prerender/:projectId", async (req, res) => {
-  try {
-    const { projectId } = req.params;
-
-    // Always serve from cache if available
-    if (projectsCache) {
-      const project = projectsCache.find((p) => p.id === projectId);
-
-      if (project) {
-        // Generate HTML with proper meta tags
-        const html = generatePageHtml(project, projectId);
-
-        // Set content type and send HTML
-        res.set("Content-Type", "text/html");
-        res.send(html);
-      } else {
-        res.status(404).send("Project not found");
-      }
-
-      // Always update cache in background
-      updateCacheInBackground();
-    } else {
-      // No cache available - fetch fresh data
-      const projects = await fetchProjectsFromRemote();
-      projectsCache = projects;
-      lastCacheUpdate = Date.now();
-      saveCacheToFile(); // Save to file after updating
-
-      const project = projects.find((p) => p.id === projectId);
-      if (project) {
-        // Generate HTML with proper meta tags
-        const html = generatePageHtml(project, projectId);
-
-        // Set content type and send HTML
-        res.set("Content-Type", "text/html");
-        res.send(html);
-      } else {
-        res.status(404).send("Project not found");
-      }
-    }
-  } catch (error) {
-    console.error("Error prerendering project:", error);
     res.status(500).send("Internal server error");
   }
 });
