@@ -22,7 +22,9 @@ const corsOptions = {
     "http://localhost:5173",
     "http://localhost:8080",
     "https://fcc.lol",
-    "https://www.fcc.lol"
+    "https://www.fcc.lol",
+    "https://rolodex-os.fcc.lol",
+    "https://www.rolodex-os.fcc.lol"
   ],
   credentials: true,
   optionsSuccessStatus: 200
