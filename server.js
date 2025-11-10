@@ -67,8 +67,7 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes in milliseconds
 const MAX_PROJECTS_CACHE_SIZE = 50 * 1024 * 1024; // 50MB limit for projects cache
 const MAX_IMAGE_BUFFERS_IN_MEMORY = 3; // Max concurrent image buffers for processing
 
-// Cache for projects data - minimal in-memory storage
-let projectsCache = null;
+// Cache metadata only (no large data in memory)
 let lastCacheUpdate = null;
 let isUpdatingCache = false;
 
@@ -536,30 +535,49 @@ async function fetchProjectsFromRemote() {
 }
 
 // Function to save cache to file
-function saveCacheToFile() {
+function saveCacheToFile(projects) {
   try {
     const cacheData = {
-      projects: projectsCache,
-      lastUpdate: lastCacheUpdate,
+      projects: projects,
+      lastUpdate: Date.now(),
       timestamp: new Date().toISOString()
     };
     fs.writeFileSync(CACHE_FILE, JSON.stringify(cacheData, null, 2));
+    console.log(`Projects cache saved: ${projects.length} projects`);
   } catch (error) {
     console.error("Error saving cache to file:", error);
   }
 }
 
-// Function to load cache from file
-function loadCacheFromFile() {
+// Function to load projects from file cache
+function getProjectsFromFile() {
   try {
     if (fs.existsSync(CACHE_FILE)) {
       const cacheData = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
-      projectsCache = cacheData.projects;
       lastCacheUpdate = cacheData.lastUpdate;
+      return cacheData.projects || [];
+    }
+  } catch (error) {
+    console.error("Error loading projects from file:", error);
+  }
+  return null;
+}
+
+// Function to load cache metadata on startup
+function loadCacheMetadata() {
+  try {
+    if (fs.existsSync(CACHE_FILE)) {
+      const cacheData = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
+      lastCacheUpdate = cacheData.lastUpdate;
+      console.log(
+        `Cache metadata loaded. Last update: ${new Date(
+          lastCacheUpdate
+        ).toISOString()}`
+      );
       return true;
     }
   } catch (error) {
-    console.error("Error loading cache from file:", error);
+    console.error("Error loading cache metadata:", error);
   }
   return false;
 }
@@ -716,22 +734,6 @@ function isCacheStale() {
   return Date.now() - lastCacheUpdate > CACHE_TTL;
 }
 
-// Function to check projects cache size and enforce limits
-function enforceProjectsCacheLimit() {
-  if (projectsCache) {
-    const cacheSize = Buffer.byteLength(JSON.stringify(projectsCache), "utf8");
-    if (cacheSize > MAX_PROJECTS_CACHE_SIZE) {
-      console.warn(
-        `Projects cache size (${Math.round(
-          cacheSize / 1024 / 1024
-        )}MB) exceeds limit, clearing cache`
-      );
-      projectsCache = null;
-      lastCacheUpdate = null;
-    }
-  }
-}
-
 // Function to update cache in background (only if stale)
 async function updateCacheInBackground() {
   if (isUpdatingCache || !isCacheStale()) {
@@ -742,13 +744,10 @@ async function updateCacheInBackground() {
   isUpdatingCache = true;
   try {
     const newProjects = await fetchProjectsFromRemote();
-    projectsCache = newProjects;
     lastCacheUpdate = Date.now();
 
-    // Enforce cache size limits
-    enforceProjectsCacheLimit();
-
-    saveCacheToFile(); // Save to file after updating
+    // Save to file (no in-memory storage)
+    saveCacheToFile(newProjects);
 
     // Clear share image cache since projects data has changed
     clearShareImageCache();
@@ -763,27 +762,27 @@ async function updateCacheInBackground() {
 
 app.get("/projects", async (req, res) => {
   try {
-    // Always serve from cache if available
-    if (projectsCache) {
-      res.json(sortProjectsByDate(projectsCache));
+    // Try to load from file cache first
+    let projects = getProjectsFromFile();
 
-      // Always update cache in background
+    if (projects) {
+      res.json(sortProjectsByDate(projects));
+      // Update cache in background if stale
       updateCacheInBackground();
     } else {
       // No cache available - fetch fresh data
-      const projects = await fetchProjectsFromRemote();
-      projectsCache = projects;
+      projects = await fetchProjectsFromRemote();
       lastCacheUpdate = Date.now();
-      saveCacheToFile(); // Save to file after updating
-
+      saveCacheToFile(projects);
       res.json(sortProjectsByDate(projects));
     }
   } catch (error) {
     console.error("Error reading projects:", error);
 
-    // If we have cache, serve it as fallback
-    if (projectsCache) {
-      res.json(sortProjectsByDate(projectsCache));
+    // Try fallback to file cache
+    const fallbackProjects = getProjectsFromFile();
+    if (fallbackProjects) {
+      res.json(sortProjectsByDate(fallbackProjects));
     } else {
       res.status(500).json({ error: "Failed to read projects" });
     }
@@ -801,9 +800,7 @@ app.get("/homepage/prerender", async (req, res) => {
     res.send(html);
 
     // Update cache in background if needed
-    if (projectsCache) {
-      updateCacheInBackground();
-    }
+    updateCacheInBackground();
   } catch (error) {
     console.error("Error prerendering homepage:", error);
     res.status(500).send("Internal server error");
@@ -814,9 +811,11 @@ app.get("/projects/:projectId", async (req, res) => {
   try {
     const { projectId } = req.params;
 
-    // Always serve from cache if available
-    if (projectsCache) {
-      const project = projectsCache.find((p) => p.id === projectId);
+    // Load from file
+    let projects = getProjectsFromFile();
+
+    if (projects) {
+      const project = projects.find((p) => p.id === projectId);
 
       if (project) {
         res.json(project);
@@ -824,14 +823,13 @@ app.get("/projects/:projectId", async (req, res) => {
         res.status(404).json({ error: "Project not found" });
       }
 
-      // Always update cache in background
+      // Update cache in background if stale
       updateCacheInBackground();
     } else {
       // No cache available - fetch fresh data
-      const projects = await fetchProjectsFromRemote();
-      projectsCache = projects;
+      projects = await fetchProjectsFromRemote();
       lastCacheUpdate = Date.now();
-      saveCacheToFile(); // Save to file after updating
+      saveCacheToFile(projects);
 
       const project = projects.find((p) => p.id === projectId);
       if (project) {
@@ -843,9 +841,12 @@ app.get("/projects/:projectId", async (req, res) => {
   } catch (error) {
     console.error(`Error reading project ${req.params.projectId}:`, error);
 
-    // If we have cache, serve it as fallback
-    if (projectsCache) {
-      const project = projectsCache.find((p) => p.id === req.params.projectId);
+    // Try fallback to file
+    const fallbackProjects = getProjectsFromFile();
+    if (fallbackProjects) {
+      const project = fallbackProjects.find(
+        (p) => p.id === req.params.projectId
+      );
       if (project) {
         res.json(project);
       } else {
@@ -862,21 +863,21 @@ app.get("/projects/person/:personName", async (req, res) => {
   try {
     const { personName } = req.params;
 
-    // Always serve from cache if available
-    if (projectsCache) {
-      const personProjects = filterProjectsByPerson(projectsCache, personName);
+    // Load from file
+    let projects = getProjectsFromFile();
+
+    if (projects) {
+      const personProjects = filterProjectsByPerson(projects, personName);
       res.json(sortProjectsByDate(personProjects));
 
-      // Always update cache in background
+      // Update cache in background if stale
       updateCacheInBackground();
     } else {
       // No cache available - fetch fresh data
-      const projects = await fetchProjectsFromRemote();
-      projectsCache = projects;
+      projects = await fetchProjectsFromRemote();
       lastCacheUpdate = Date.now();
-      saveCacheToFile(); // Save to file after updating
+      saveCacheToFile(projects);
 
-      // Filter projects by person
       const personProjects = filterProjectsByPerson(projects, personName);
       res.json(sortProjectsByDate(personProjects));
     }
@@ -886,10 +887,11 @@ app.get("/projects/person/:personName", async (req, res) => {
       error
     );
 
-    // If we have cache, serve it as fallback
-    if (projectsCache) {
+    // Try fallback to file
+    const fallbackProjects = getProjectsFromFile();
+    if (fallbackProjects) {
       const personProjects = filterProjectsByPerson(
-        projectsCache,
+        fallbackProjects,
         req.params.personName
       );
       res.json(sortProjectsByDate(personProjects));
@@ -902,19 +904,20 @@ app.get("/projects/person/:personName", async (req, res) => {
 // Get all unique tags from projects
 app.get("/tags", async (req, res) => {
   try {
-    // Always serve from cache if available
-    if (projectsCache) {
-      const tags = getAllTags(projectsCache);
+    // Load from file
+    let projects = getProjectsFromFile();
+
+    if (projects) {
+      const tags = getAllTags(projects);
       res.json(tags);
 
-      // Always update cache in background
+      // Update cache in background if stale
       updateCacheInBackground();
     } else {
       // No cache available - fetch fresh data
-      const projects = await fetchProjectsFromRemote();
-      projectsCache = projects;
+      projects = await fetchProjectsFromRemote();
       lastCacheUpdate = Date.now();
-      saveCacheToFile(); // Save to file after updating
+      saveCacheToFile(projects);
 
       const tags = getAllTags(projects);
       res.json(tags);
@@ -922,9 +925,10 @@ app.get("/tags", async (req, res) => {
   } catch (error) {
     console.error("Error reading tags:", error);
 
-    // If we have cache, serve it as fallback
-    if (projectsCache) {
-      const tags = getAllTags(projectsCache);
+    // Try fallback to file
+    const fallbackProjects = getProjectsFromFile();
+    if (fallbackProjects) {
+      const tags = getAllTags(fallbackProjects);
       res.json(tags);
     } else {
       res.status(500).json({ error: "Failed to read tags" });
@@ -937,21 +941,21 @@ app.get("/projects/tag/:tagName", async (req, res) => {
   try {
     const { tagName } = req.params;
 
-    // Always serve from cache if available
-    if (projectsCache) {
-      const tagProjects = filterProjectsByTag(projectsCache, tagName);
+    // Load from file
+    let projects = getProjectsFromFile();
+
+    if (projects) {
+      const tagProjects = filterProjectsByTag(projects, tagName);
       res.json(sortProjectsByDate(tagProjects));
 
-      // Always update cache in background
+      // Update cache in background if stale
       updateCacheInBackground();
     } else {
       // No cache available - fetch fresh data
-      const projects = await fetchProjectsFromRemote();
-      projectsCache = projects;
+      projects = await fetchProjectsFromRemote();
       lastCacheUpdate = Date.now();
-      saveCacheToFile(); // Save to file after updating
+      saveCacheToFile(projects);
 
-      // Filter projects by tag
       const tagProjects = filterProjectsByTag(projects, tagName);
       res.json(sortProjectsByDate(tagProjects));
     }
@@ -961,10 +965,11 @@ app.get("/projects/tag/:tagName", async (req, res) => {
       error
     );
 
-    // If we have cache, serve it as fallback
-    if (projectsCache) {
+    // Try fallback to file
+    const fallbackProjects = getProjectsFromFile();
+    if (fallbackProjects) {
       const tagProjects = filterProjectsByTag(
-        projectsCache,
+        fallbackProjects,
         req.params.tagName
       );
       res.json(sortProjectsByDate(tagProjects));
@@ -988,9 +993,8 @@ app.get("/admin/refresh-cache", authenticateAdmin, async (req, res) => {
     isUpdatingCache = true;
 
     const newProjects = await fetchProjectsFromRemote();
-    projectsCache = newProjects;
     lastCacheUpdate = Date.now();
-    saveCacheToFile();
+    saveCacheToFile(newProjects);
 
     // Clear share image cache since projects data has changed
     clearShareImageCache();
@@ -1017,10 +1021,11 @@ app.get("/admin/refresh-cache", authenticateAdmin, async (req, res) => {
 app.get("/admin/cache-status", authenticateAdmin, (req, res) => {
   const cacheAge = lastCacheUpdate ? Date.now() - lastCacheUpdate : null;
   const isStale = isCacheStale();
+  const projects = getProjectsFromFile();
 
   res.json({
-    hasCachedData: !!projectsCache,
-    projectCount: projectsCache ? projectsCache.length : 0,
+    hasCachedData: !!projects,
+    projectCount: projects ? projects.length : 0,
     lastUpdate: lastCacheUpdate
       ? new Date(lastCacheUpdate).toISOString()
       : null,
@@ -1070,8 +1075,7 @@ app.get("/admin/memory-status", authenticateAdmin, (req, res) => {
       maxImageBuffersInMemory: MAX_IMAGE_BUFFERS_IN_MEMORY
     },
     projectsCache: {
-      hasCache: !!projectsCache,
-      projectCount: projectsCache ? projectsCache.length : 0,
+      hasFileCache: fs.existsSync(CACHE_FILE),
       lastUpdate: lastCacheUpdate
         ? new Date(lastCacheUpdate).toISOString()
         : null
@@ -1112,9 +1116,11 @@ app.get("/projects/prerender/:projectId", async (req, res) => {
   try {
     const { projectId } = req.params;
 
-    // Always serve from cache if available
-    if (projectsCache) {
-      const project = projectsCache.find((p) => p.id === projectId);
+    // Load from file
+    let projects = getProjectsFromFile();
+
+    if (projects) {
+      const project = projects.find((p) => p.id === projectId);
 
       if (project) {
         // Generate HTML with proper meta tags
@@ -1127,14 +1133,13 @@ app.get("/projects/prerender/:projectId", async (req, res) => {
         res.status(404).send("Project not found");
       }
 
-      // Always update cache in background
+      // Update cache in background if stale
       updateCacheInBackground();
     } else {
       // No cache available - fetch fresh data
-      const projects = await fetchProjectsFromRemote();
-      projectsCache = projects;
+      projects = await fetchProjectsFromRemote();
       lastCacheUpdate = Date.now();
-      saveCacheToFile(); // Save to file after updating
+      saveCacheToFile(projects);
 
       const project = projects.find((p) => p.id === projectId);
       if (project) {
@@ -1159,8 +1164,10 @@ app.get("/projects/prerender/tag/:tagName", async (req, res) => {
   try {
     const { tagName } = req.params;
 
-    // Get projects from cache
-    if (!projectsCache) {
+    // Load from file
+    const projects = getProjectsFromFile();
+
+    if (!projects) {
       // If no cache, generate basic HTML without project count
       const html = generateTagPageHtml(tagName, 0);
       res.set("Content-Type", "text/html");
@@ -1169,7 +1176,7 @@ app.get("/projects/prerender/tag/:tagName", async (req, res) => {
     }
 
     // Filter projects by tag to get count
-    const tagProjects = filterProjectsByTag(projectsCache, tagName);
+    const tagProjects = filterProjectsByTag(projects, tagName);
     const projectCount = tagProjects.length;
 
     // Generate HTML with proper meta tags
@@ -1192,8 +1199,10 @@ app.get("/projects/prerender/person/:personName", async (req, res) => {
   try {
     const { personName } = req.params;
 
-    // Get projects from cache
-    if (!projectsCache) {
+    // Load from file
+    const projects = getProjectsFromFile();
+
+    if (!projects) {
       // If no cache, generate basic HTML without project count
       const html = generatePersonPageHtml(personName, 0);
       res.set("Content-Type", "text/html");
@@ -1202,7 +1211,7 @@ app.get("/projects/prerender/person/:personName", async (req, res) => {
     }
 
     // Filter projects by person to get count
-    const personProjects = filterProjectsByPerson(projectsCache, personName);
+    const personProjects = filterProjectsByPerson(projects, personName);
     const projectCount = personProjects.length;
 
     // Generate HTML with proper meta tags
@@ -1275,13 +1284,13 @@ app.get("/projects/:projectId/share-image", async (req, res) => {
   try {
     const { projectId } = req.params;
 
-    // Get projects from cache
-    if (!projectsCache) {
+    // Load from file and find the specific project
+    const projects = getProjectsFromFile();
+    if (!projects) {
       return res.status(400).json({ error: "No projects data available" });
     }
 
-    // Find the specific project
-    const project = projectsCache.find((p) => p.id === projectId);
+    const project = projects.find((p) => p.id === projectId);
     if (!project) {
       return res.status(404).json({ error: "Project not found" });
     }
@@ -1386,8 +1395,9 @@ app.get("/homepage/share-image", async (req, res) => {
       return;
     }
 
-    // Get projects from cache
-    if (!projectsCache) {
+    // Load from file
+    const projects = getProjectsFromFile();
+    if (!projects) {
       return res.status(400).json({ error: "No projects data available" });
     }
 
@@ -1395,7 +1405,7 @@ app.get("/homepage/share-image", async (req, res) => {
     logMemoryUsage("Before homepage share image generation");
 
     // Get sorted projects and extract primary images (up to 6 for 3x2 grid)
-    const sortedProjects = sortProjectsByDate(projectsCache);
+    const sortedProjects = sortProjectsByDate(projects);
     const images = [];
 
     for (const project of sortedProjects) {
@@ -1552,15 +1562,16 @@ app.get("/tag/:tagName/share-image", async (req, res) => {
       return;
     }
 
-    // Get projects from cache
-    if (!projectsCache) {
+    // Load from file
+    const projects = getProjectsFromFile();
+    if (!projects) {
       return res.status(400).json({ error: "No projects data available" });
     }
 
     console.log(`Generating new tag share image for: ${tagName}`);
 
     // Filter projects by tag and extract primary images
-    const tagProjects = filterProjectsByTag(projectsCache, tagName);
+    const tagProjects = filterProjectsByTag(projects, tagName);
     const sortedProjects = sortProjectsByDate(tagProjects);
     const images = [];
 
@@ -1718,15 +1729,16 @@ app.get("/person/:personName/share-image", async (req, res) => {
       return;
     }
 
-    // Get projects from cache
-    if (!projectsCache) {
+    // Load from file
+    const projects = getProjectsFromFile();
+    if (!projects) {
       return res.status(400).json({ error: "No projects data available" });
     }
 
     console.log(`Generating new person share image for: ${personName}`);
 
     // Filter projects by person and extract primary images
-    const personProjects = filterProjectsByPerson(projectsCache, personName);
+    const personProjects = filterProjectsByPerson(projects, personName);
     const sortedProjects = sortProjectsByDate(personProjects);
     const images = [];
 
@@ -1944,8 +1956,8 @@ app.get("/space/share-image", async (req, res) => {
   }
 });
 
-// Load cache from file on startup
-loadCacheFromFile();
+// Load cache metadata on startup (not full data)
+loadCacheMetadata();
 
 app.listen(port, () => {
   console.log(`Server is running at http://localhost:${port}`);
