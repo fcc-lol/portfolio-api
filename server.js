@@ -1383,7 +1383,6 @@ app.get("/projects/:projectId/share-image", async (req, res) => {
     try {
       if (project.primaryImage.url.startsWith(baseUrl)) {
         checkMemoryPressure(); // Check memory before download
-        logMemoryUsage("Before individual project image download");
 
         const response = await fetch(project.primaryImage.url);
         if (response.ok) {
@@ -1393,7 +1392,7 @@ app.get("/projects/:projectId/share-image", async (req, res) => {
       }
     } catch (error) {
       console.error(
-        `[DEBUG] Error processing image ${project.primaryImage.url}:`,
+        `Error processing image ${project.primaryImage.url}:`,
         error
       );
       return res.status(500).json({ error: "Failed to process image" });
@@ -1425,7 +1424,7 @@ app.get("/projects/:projectId/share-image", async (req, res) => {
       // Clean up original buffer immediately after processing
       imageBuffer = null;
     } catch (error) {
-      console.error(`[DEBUG] Error resizing image:`, error);
+      console.error(`Error resizing image:`, error);
       return res.status(500).json({ error: "Failed to resize image" });
     } finally {
       imageBuffer = null;
@@ -1475,7 +1474,6 @@ app.get("/homepage/share-image", async (req, res) => {
     }
 
     console.log("Generating new homepage share image");
-    logMemoryUsage("Before homepage share image generation");
 
     // Get sorted projects and extract primary images (up to 6 for 3x2 grid)
     const sortedProjects = sortProjectsByDate(projects);
@@ -1526,7 +1524,7 @@ app.get("/homepage/share-image", async (req, res) => {
 
         return processedBuffer;
       } catch (error) {
-        console.error(`[DEBUG] Error processing image ${imageUrl}:`, error);
+        console.error(`Error processing image ${imageUrl}:`, error);
         return null;
       } finally {
         // Explicit cleanup
@@ -1693,7 +1691,7 @@ app.get("/tag/:tagName/share-image", async (req, res) => {
 
         return processedBuffer;
       } catch (error) {
-        console.error(`[DEBUG] Error processing image ${imageUrl}:`, error);
+        console.error(`Error processing image ${imageUrl}:`, error);
         return null;
       } finally {
         // Explicit cleanup
@@ -1860,7 +1858,7 @@ app.get("/person/:personName/share-image", async (req, res) => {
 
         return processedBuffer;
       } catch (error) {
-        console.error(`[DEBUG] Error processing image ${imageUrl}:`, error);
+        console.error(`Error processing image ${imageUrl}:`, error);
         return null;
       } finally {
         // Explicit cleanup
@@ -1984,10 +1982,7 @@ app.get("/space/share-image", async (req, res) => {
         imageBuffer = Buffer.from(arrayBuffer);
       }
     } catch (error) {
-      console.error(
-        `[DEBUG] Error processing studio photo ${studioPhotoUrl}:`,
-        error
-      );
+      console.error(`Error processing studio photo ${studioPhotoUrl}:`, error);
       return res.status(500).json({ error: "Failed to process studio photo" });
     }
 
@@ -2034,14 +2029,4 @@ loadCacheMetadata();
 
 app.listen(port, () => {
   console.log(`Server is running at http://localhost:${port}`);
-
-  // Log initial memory usage after startup
-  setTimeout(() => {
-    logMemoryUsage("Server startup complete");
-    const memory = getMemoryUsage();
-    console.log(
-      `[INFO] RSS includes Node.js runtime + libraries (~40-50MB base overhead)`
-    );
-    console.log(`[INFO] Heap (your data) is only: ${memory.heapUsed}MB`);
-  }, 1000);
 });
