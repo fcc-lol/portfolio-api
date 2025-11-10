@@ -61,20 +61,65 @@ function authenticateAdmin(req, res, next) {
   next();
 }
 
-// Cache for projects data
+// Cache configuration
+const CACHE_FILE = "projects-cache.json";
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes in milliseconds
+const MAX_PROJECTS_CACHE_SIZE = 50 * 1024 * 1024; // 50MB limit for projects cache
+const MAX_IMAGE_BUFFERS_IN_MEMORY = 3; // Max concurrent image buffers for processing
+
+// Cache for projects data - minimal in-memory storage
 let projectsCache = null;
 let lastCacheUpdate = null;
 let isUpdatingCache = false;
-const CACHE_FILE = "projects-cache.json";
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes in milliseconds
 
-// Cache for share images
-let shareImageCache = {
-  homepage: null,
-  tags: {},
-  persons: {}
-};
+// File-based cache directory for share images (no in-memory caching)
 const SHARE_IMAGE_CACHE_DIR = "share-images";
+
+// Memory monitoring functions
+function getMemoryUsage() {
+  const memUsage = process.memoryUsage();
+  return {
+    rss: Math.round(memUsage.rss / 1024 / 1024), // MB
+    heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024), // MB
+    heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024), // MB
+    external: Math.round(memUsage.external / 1024 / 1024), // MB
+    arrayBuffers: Math.round(memUsage.arrayBuffers / 1024 / 1024) // MB
+  };
+}
+
+function logMemoryUsage(context) {
+  const memory = getMemoryUsage();
+  console.log(
+    `[MEMORY] ${context}: RSS=${memory.rss}MB, Heap=${memory.heapUsed}/${memory.heapTotal}MB, External=${memory.external}MB, ArrayBuffers=${memory.arrayBuffers}MB`
+  );
+}
+
+function checkMemoryPressure() {
+  const memory = getMemoryUsage();
+  const memoryPressure = memory.heapUsed / memory.heapTotal;
+
+  if (memoryPressure > 0.85) {
+    console.warn(
+      `[MEMORY] High memory pressure detected: ${Math.round(
+        memoryPressure * 100
+      )}%`
+    );
+
+    // Clear file-based caches if memory pressure is critical
+    if (memoryPressure > 0.9) {
+      console.warn("[MEMORY] Critical memory pressure, clearing file caches");
+      clearShareImageCache();
+
+      if (global.gc) {
+        global.gc();
+        logMemoryUsage("After emergency cleanup");
+      }
+    }
+
+    return true;
+  }
+  return false;
+}
 
 // Function to get image dimensions from URL
 async function getImageDimensions(url) {
@@ -563,30 +608,7 @@ function isShareImageCacheValid(cachePath) {
   }
 }
 
-// Function to save share image to cache
-function saveShareImageToCache(cachePath, imageBuffer) {
-  try {
-    ensureShareImageCacheDir();
-    fs.writeFileSync(cachePath, imageBuffer);
-    console.log(`Share image cached: ${cachePath}`);
-  } catch (error) {
-    console.error("Error saving share image to cache:", error);
-  }
-}
-
-// Function to load share image from cache
-function loadShareImageFromCache(cachePath) {
-  try {
-    if (fs.existsSync(cachePath)) {
-      return fs.readFileSync(cachePath);
-    }
-  } catch (error) {
-    console.error("Error loading share image from cache:", error);
-  }
-  return null;
-}
-
-// Function to clear all share image cache
+// Function to clear all share image cache (file-based only)
 function clearShareImageCache() {
   try {
     if (fs.existsSync(SHARE_IMAGE_CACHE_DIR)) {
@@ -594,7 +616,7 @@ function clearShareImageCache() {
       for (const file of files) {
         fs.unlinkSync(path.join(SHARE_IMAGE_CACHE_DIR, file));
       }
-      console.log("Share image cache cleared");
+      console.log(`Share image cache cleared: ${files.length} files deleted`);
     }
   } catch (error) {
     console.error("Error clearing share image cache:", error);
@@ -694,6 +716,22 @@ function isCacheStale() {
   return Date.now() - lastCacheUpdate > CACHE_TTL;
 }
 
+// Function to check projects cache size and enforce limits
+function enforceProjectsCacheLimit() {
+  if (projectsCache) {
+    const cacheSize = Buffer.byteLength(JSON.stringify(projectsCache), "utf8");
+    if (cacheSize > MAX_PROJECTS_CACHE_SIZE) {
+      console.warn(
+        `Projects cache size (${Math.round(
+          cacheSize / 1024 / 1024
+        )}MB) exceeds limit, clearing cache`
+      );
+      projectsCache = null;
+      lastCacheUpdate = null;
+    }
+  }
+}
+
 // Function to update cache in background (only if stale)
 async function updateCacheInBackground() {
   if (isUpdatingCache || !isCacheStale()) {
@@ -706,6 +744,10 @@ async function updateCacheInBackground() {
     const newProjects = await fetchProjectsFromRemote();
     projectsCache = newProjects;
     lastCacheUpdate = Date.now();
+
+    // Enforce cache size limits
+    enforceProjectsCacheLimit();
+
     saveCacheToFile(); // Save to file after updating
 
     // Clear share image cache since projects data has changed
@@ -991,6 +1033,80 @@ app.get("/admin/cache-status", authenticateAdmin, (req, res) => {
   });
 });
 
+// Memory status endpoint
+app.get("/admin/memory-status", authenticateAdmin, (req, res) => {
+  const memory = getMemoryUsage();
+  const memoryPressure = memory.heapUsed / memory.heapTotal;
+
+  // Count cached files
+  let cachedFilesCount = 0;
+  let cachedFilesSize = 0;
+  try {
+    if (fs.existsSync(SHARE_IMAGE_CACHE_DIR)) {
+      const files = fs.readdirSync(SHARE_IMAGE_CACHE_DIR);
+      cachedFilesCount = files.length;
+      files.forEach((file) => {
+        const stats = fs.statSync(path.join(SHARE_IMAGE_CACHE_DIR, file));
+        cachedFilesSize += stats.size;
+      });
+    }
+  } catch (error) {
+    console.error("Error reading cache directory:", error);
+  }
+
+  res.json({
+    memory: memory,
+    memoryPressure: Math.round(memoryPressure * 100),
+    memoryPressureLevel:
+      memoryPressure > 0.9
+        ? "critical"
+        : memoryPressure > 0.85
+        ? "high"
+        : memoryPressure > 0.7
+        ? "moderate"
+        : "low",
+    limits: {
+      maxProjectsCacheSizeMB: Math.round(MAX_PROJECTS_CACHE_SIZE / 1024 / 1024),
+      maxImageBuffersInMemory: MAX_IMAGE_BUFFERS_IN_MEMORY
+    },
+    projectsCache: {
+      hasCache: !!projectsCache,
+      projectCount: projectsCache ? projectsCache.length : 0,
+      lastUpdate: lastCacheUpdate
+        ? new Date(lastCacheUpdate).toISOString()
+        : null
+    },
+    fileCacheStatus: {
+      cachedFiles: cachedFilesCount,
+      totalSizeMB: Math.round(cachedFilesSize / 1024 / 1024),
+      cacheDirectory: SHARE_IMAGE_CACHE_DIR
+    },
+    gcAvailable: !!global.gc
+  });
+});
+
+// Memory cleanup endpoint
+app.post("/admin/memory-cleanup", authenticateAdmin, (req, res) => {
+  const beforeMemory = getMemoryUsage();
+
+  // Force garbage collection if available
+  if (global.gc) {
+    global.gc();
+  }
+
+  const afterMemory = getMemoryUsage();
+  const freedMB = beforeMemory.heapUsed - afterMemory.heapUsed;
+
+  res.json({
+    success: true,
+    message: "Memory cleanup completed (GC triggered)",
+    beforeMemory,
+    afterMemory,
+    freedMemoryMB: Math.max(0, freedMB),
+    gcTriggered: !!global.gc
+  });
+});
+
 // Prerender route for social media crawlers
 app.get("/projects/prerender/:projectId", async (req, res) => {
   try {
@@ -1177,12 +1293,16 @@ app.get("/projects/:projectId/share-image", async (req, res) => {
         .json({ error: "No primary image found for this project" });
     }
 
-    // Download and process the image
+    // Download and process the image with memory management
     const baseUrl = "https://static.fcc.lol/portfolio-storage";
-    let imageBuffer;
+    let imageBuffer = null;
+    let outputBuffer = null;
 
     try {
       if (project.primaryImage.url.startsWith(baseUrl)) {
+        checkMemoryPressure(); // Check memory before download
+        logMemoryUsage("Before individual project image download");
+
         const response = await fetch(project.primaryImage.url);
         if (response.ok) {
           const arrayBuffer = await response.arrayBuffer();
@@ -1195,24 +1315,40 @@ app.get("/projects/:projectId/share-image", async (req, res) => {
         error
       );
       return res.status(500).json({ error: "Failed to process image" });
+    } finally {
+      // Cleanup in finally block
+      if (imageBuffer && !outputBuffer) {
+        imageBuffer = null;
+      }
     }
 
     if (!imageBuffer) {
       return res.status(400).json({ error: "No valid image found" });
     }
 
-    // Resize image to standard share image dimensions
-    const canvasWidth = 1200;
-    const canvasHeight = 630;
+    try {
+      // Resize image to standard share image dimensions
+      const canvasWidth = 1200;
+      const canvasHeight = 630;
 
-    const outputBuffer = await sharp(imageBuffer)
-      .resize(canvasWidth, canvasHeight, {
-        fit: "cover",
-        position: "center",
-        withoutEnlargement: false
-      })
-      .jpeg({ quality: 85 })
-      .toBuffer();
+      outputBuffer = await sharp(imageBuffer)
+        .resize(canvasWidth, canvasHeight, {
+          fit: "cover",
+          position: "center",
+          withoutEnlargement: false
+        })
+        .jpeg({ quality: 85 })
+        .toBuffer();
+
+      // Clean up original buffer immediately after processing
+      imageBuffer = null;
+    } catch (error) {
+      console.error(`[DEBUG] Error resizing image:`, error);
+      return res.status(500).json({ error: "Failed to resize image" });
+    } finally {
+      imageBuffer = null;
+      if (global.gc) global.gc();
+    }
 
     // Set headers to serve the image directly
     res.set({
@@ -1238,17 +1374,16 @@ app.get("/homepage/share-image", async (req, res) => {
     // Check if we have a valid cached version
     const cachePath = getShareImageCachePath("homepage");
     if (isShareImageCacheValid(cachePath)) {
-      const cachedImage = loadShareImageFromCache(cachePath);
-      if (cachedImage) {
-        console.log("Serving cached homepage share image");
-        res.set({
-          "Content-Type": "image/jpeg",
-          "Content-Length": cachedImage.length,
-          "Cache-Control": "public, max-age=3600", // Cache for 1 hour
-          "Content-Disposition": `inline; filename="homepage-share.jpg"`
-        });
-        return res.send(cachedImage);
-      }
+      console.log("Serving cached homepage share image from file");
+      res.set({
+        "Content-Type": "image/jpeg",
+        "Cache-Control": "public, max-age=3600", // Cache for 1 hour
+        "Content-Disposition": `inline; filename="homepage-share.jpg"`
+      });
+      // Stream file directly from disk - no memory buffering
+      const fileStream = fs.createReadStream(cachePath);
+      fileStream.pipe(res);
+      return;
     }
 
     // Get projects from cache
@@ -1257,6 +1392,7 @@ app.get("/homepage/share-image", async (req, res) => {
     }
 
     console.log("Generating new homepage share image");
+    logMemoryUsage("Before homepage share image generation");
 
     // Get sorted projects and extract primary images (up to 6 for 3x2 grid)
     const sortedProjects = sortProjectsByDate(projectsCache);
@@ -1274,48 +1410,72 @@ app.get("/homepage/share-image", async (req, res) => {
         .json({ error: "No primary images found in projects" });
     }
 
-    // Download and process images
-    const imageBuffers = [];
+    // Process images in batches to limit memory usage
     const baseUrl = "https://static.fcc.lol/portfolio-storage";
-
-    for (const imageUrl of images) {
-      try {
-        if (imageUrl.startsWith(baseUrl)) {
-          const response = await fetch(imageUrl);
-          if (response.ok) {
-            const arrayBuffer = await response.arrayBuffer();
-            const imageBuffer = Buffer.from(arrayBuffer);
-            imageBuffers.push(imageBuffer);
-          }
-        }
-      } catch (error) {
-        console.error(`[DEBUG] Error processing image ${imageUrl}:`, error);
-      }
-    }
-
-    if (imageBuffers.length === 0) {
-      return res.status(400).json({ error: "No valid images found" });
-    }
-
-    // Create 3x2 grid composite image
-    let composite;
     const canvasWidth = 1200;
     const canvasHeight = 630;
     const cellWidth = canvasWidth / 3;
     const cellHeight = canvasHeight / 2;
 
-    // Prepare all images for the grid
-    const processedImages = await Promise.all(
-      imageBuffers.slice(0, 6).map(async (buffer, index) => {
-        return await sharp(buffer)
+    // Helper function to process a single image with memory cleanup
+    async function processImage(imageUrl, index) {
+      let imageBuffer = null;
+      try {
+        if (!imageUrl.startsWith(baseUrl)) return null;
+
+        const response = await fetch(imageUrl);
+        if (!response.ok) return null;
+
+        const arrayBuffer = await response.arrayBuffer();
+        imageBuffer = Buffer.from(arrayBuffer);
+
+        // Process image immediately and return processed buffer
+        const processedBuffer = await sharp(imageBuffer)
           .resize(cellWidth, cellHeight, {
             fit: "cover",
             position: "center",
             withoutEnlargement: false
           })
           .toBuffer();
-      })
-    );
+
+        // Clean up original buffer immediately
+        imageBuffer = null;
+
+        return processedBuffer;
+      } catch (error) {
+        console.error(`[DEBUG] Error processing image ${imageUrl}:`, error);
+        return null;
+      } finally {
+        // Explicit cleanup
+        imageBuffer = null;
+        if (global.gc) global.gc();
+      }
+    }
+
+    // Process images in batches of MAX_IMAGE_BUFFERS_IN_MEMORY
+    const processedImages = [];
+    for (
+      let i = 0;
+      i < Math.min(images.length, 6);
+      i += MAX_IMAGE_BUFFERS_IN_MEMORY
+    ) {
+      const batch = images.slice(i, i + MAX_IMAGE_BUFFERS_IN_MEMORY);
+      const batchResults = await Promise.all(
+        batch.map((imageUrl) => processImage(imageUrl, i))
+      );
+
+      // Add non-null results
+      processedImages.push(...batchResults.filter((img) => img !== null));
+
+      // Clean up batch results from memory
+      for (let result of batchResults) {
+        result = null;
+      }
+    }
+
+    if (processedImages.length === 0) {
+      return res.status(400).json({ error: "No valid images found" });
+    }
 
     // Create composite with 3x2 grid layout
     const compositeInputs = [];
@@ -1343,22 +1503,29 @@ app.get("/homepage/share-image", async (req, res) => {
       }
     }).composite(compositeInputs);
 
-    // Generate final image
-    const outputBuffer = await composite.jpeg({ quality: 85 }).toBuffer();
+    // Generate final image and save directly to file
+    await composite.jpeg({ quality: 85 }).toFile(cachePath);
+    console.log(`Homepage share image generated and saved to: ${cachePath}`);
 
-    // Cache the generated image
-    saveShareImageToCache(cachePath, outputBuffer);
+    // Clean up processed images from memory immediately
+    processedImages.forEach((img, index) => {
+      processedImages[index] = null;
+    });
+    processedImages.length = 0;
+    composite = null;
 
-    // Set headers to serve the image directly
+    // Trigger garbage collection
+    if (global.gc) global.gc();
+
+    // Stream the file from disk - no need to keep in memory
     res.set({
       "Content-Type": "image/jpeg",
-      "Content-Length": outputBuffer.length,
       "Cache-Control": "public, max-age=3600", // Cache for 1 hour
       "Content-Disposition": `inline; filename="homepage-share.jpg"`
     });
 
-    // Send the image buffer directly
-    res.send(outputBuffer);
+    const fileStream = fs.createReadStream(cachePath);
+    fileStream.pipe(res);
   } catch (error) {
     console.error("Error generating homepage share image:", error);
     res.status(500).json({ error: "Internal server error" });
@@ -1373,17 +1540,16 @@ app.get("/tag/:tagName/share-image", async (req, res) => {
     // Check if we have a valid cached version
     const cachePath = getShareImageCachePath("tag", tagName);
     if (isShareImageCacheValid(cachePath)) {
-      const cachedImage = loadShareImageFromCache(cachePath);
-      if (cachedImage) {
-        console.log(`Serving cached tag share image for: ${tagName}`);
-        res.set({
-          "Content-Type": "image/jpeg",
-          "Content-Length": cachedImage.length,
-          "Cache-Control": "public, max-age=3600", // Cache for 1 hour
-          "Content-Disposition": `inline; filename="${tagName}-share.jpg"`
-        });
-        return res.send(cachedImage);
-      }
+      console.log(`Serving cached tag share image for: ${tagName}`);
+      res.set({
+        "Content-Type": "image/jpeg",
+        "Cache-Control": "public, max-age=3600", // Cache for 1 hour
+        "Content-Disposition": `inline; filename="${tagName}-share.jpg"`
+      });
+      // Stream file directly from disk - no memory buffering
+      const fileStream = fs.createReadStream(cachePath);
+      fileStream.pipe(res);
+      return;
     }
 
     // Get projects from cache
@@ -1410,48 +1576,72 @@ app.get("/tag/:tagName/share-image", async (req, res) => {
       });
     }
 
-    // Download and process images
-    const imageBuffers = [];
+    // Process images in batches to limit memory usage
     const baseUrl = "https://static.fcc.lol/portfolio-storage";
-
-    for (const imageUrl of images) {
-      try {
-        if (imageUrl.startsWith(baseUrl)) {
-          const response = await fetch(imageUrl);
-          if (response.ok) {
-            const arrayBuffer = await response.arrayBuffer();
-            const imageBuffer = Buffer.from(arrayBuffer);
-            imageBuffers.push(imageBuffer);
-          }
-        }
-      } catch (error) {
-        console.error(`[DEBUG] Error processing image ${imageUrl}:`, error);
-      }
-    }
-
-    if (imageBuffers.length === 0) {
-      return res.status(400).json({ error: "No valid images found" });
-    }
-
-    // Create 3x2 grid composite image
-    let composite;
     const canvasWidth = 1200;
     const canvasHeight = 630;
     const cellWidth = canvasWidth / 3;
     const cellHeight = canvasHeight / 2;
 
-    // Prepare all images for the grid
-    const processedImages = await Promise.all(
-      imageBuffers.slice(0, 6).map(async (buffer, index) => {
-        return await sharp(buffer)
+    // Helper function to process a single image with memory cleanup
+    async function processImage(imageUrl, index) {
+      let imageBuffer = null;
+      try {
+        if (!imageUrl.startsWith(baseUrl)) return null;
+
+        const response = await fetch(imageUrl);
+        if (!response.ok) return null;
+
+        const arrayBuffer = await response.arrayBuffer();
+        imageBuffer = Buffer.from(arrayBuffer);
+
+        // Process image immediately and return processed buffer
+        const processedBuffer = await sharp(imageBuffer)
           .resize(cellWidth, cellHeight, {
             fit: "cover",
             position: "center",
             withoutEnlargement: false
           })
           .toBuffer();
-      })
-    );
+
+        // Clean up original buffer immediately
+        imageBuffer = null;
+
+        return processedBuffer;
+      } catch (error) {
+        console.error(`[DEBUG] Error processing image ${imageUrl}:`, error);
+        return null;
+      } finally {
+        // Explicit cleanup
+        imageBuffer = null;
+        if (global.gc) global.gc();
+      }
+    }
+
+    // Process images in batches of MAX_IMAGE_BUFFERS_IN_MEMORY
+    const processedImages = [];
+    for (
+      let i = 0;
+      i < Math.min(images.length, 6);
+      i += MAX_IMAGE_BUFFERS_IN_MEMORY
+    ) {
+      const batch = images.slice(i, i + MAX_IMAGE_BUFFERS_IN_MEMORY);
+      const batchResults = await Promise.all(
+        batch.map((imageUrl) => processImage(imageUrl, i))
+      );
+
+      // Add non-null results
+      processedImages.push(...batchResults.filter((img) => img !== null));
+
+      // Clean up batch results from memory
+      for (let result of batchResults) {
+        result = null;
+      }
+    }
+
+    if (processedImages.length === 0) {
+      return res.status(400).json({ error: "No valid images found" });
+    }
 
     // Create composite with 3x2 grid layout
     const compositeInputs = [];
@@ -1479,22 +1669,29 @@ app.get("/tag/:tagName/share-image", async (req, res) => {
       }
     }).composite(compositeInputs);
 
-    // Generate final image
-    const outputBuffer = await composite.jpeg({ quality: 85 }).toBuffer();
+    // Generate final image and save directly to file
+    await composite.jpeg({ quality: 85 }).toFile(cachePath);
+    console.log(`Tag share image generated and saved to: ${cachePath}`);
 
-    // Cache the generated image
-    saveShareImageToCache(cachePath, outputBuffer);
+    // Clean up processed images from memory immediately
+    processedImages.forEach((img, index) => {
+      processedImages[index] = null;
+    });
+    processedImages.length = 0;
+    composite = null;
 
-    // Set headers to serve the image directly
+    // Trigger garbage collection
+    if (global.gc) global.gc();
+
+    // Stream the file from disk - no need to keep in memory
     res.set({
       "Content-Type": "image/jpeg",
-      "Content-Length": outputBuffer.length,
       "Cache-Control": "public, max-age=3600", // Cache for 1 hour
       "Content-Disposition": `inline; filename="${tagName}-share.jpg"`
     });
 
-    // Send the image buffer directly
-    res.send(outputBuffer);
+    const fileStream = fs.createReadStream(cachePath);
+    fileStream.pipe(res);
   } catch (error) {
     console.error("Error generating tag share image:", error);
     res.status(500).json({ error: "Internal server error" });
@@ -1509,17 +1706,16 @@ app.get("/person/:personName/share-image", async (req, res) => {
     // Check if we have a valid cached version
     const cachePath = getShareImageCachePath("person", personName);
     if (isShareImageCacheValid(cachePath)) {
-      const cachedImage = loadShareImageFromCache(cachePath);
-      if (cachedImage) {
-        console.log(`Serving cached person share image for: ${personName}`);
-        res.set({
-          "Content-Type": "image/jpeg",
-          "Content-Length": cachedImage.length,
-          "Cache-Control": "public, max-age=3600", // Cache for 1 hour
-          "Content-Disposition": `inline; filename="${personName}-share.jpg"`
-        });
-        return res.send(cachedImage);
-      }
+      console.log(`Serving cached person share image for: ${personName}`);
+      res.set({
+        "Content-Type": "image/jpeg",
+        "Cache-Control": "public, max-age=3600", // Cache for 1 hour
+        "Content-Disposition": `inline; filename="${personName}-share.jpg"`
+      });
+      // Stream file directly from disk - no memory buffering
+      const fileStream = fs.createReadStream(cachePath);
+      fileStream.pipe(res);
+      return;
     }
 
     // Get projects from cache
@@ -1546,48 +1742,72 @@ app.get("/person/:personName/share-image", async (req, res) => {
       });
     }
 
-    // Download and process images
-    const imageBuffers = [];
+    // Process images in batches to limit memory usage
     const baseUrl = "https://static.fcc.lol/portfolio-storage";
-
-    for (const imageUrl of images) {
-      try {
-        if (imageUrl.startsWith(baseUrl)) {
-          const response = await fetch(imageUrl);
-          if (response.ok) {
-            const arrayBuffer = await response.arrayBuffer();
-            const imageBuffer = Buffer.from(arrayBuffer);
-            imageBuffers.push(imageBuffer);
-          }
-        }
-      } catch (error) {
-        console.error(`[DEBUG] Error processing image ${imageUrl}:`, error);
-      }
-    }
-
-    if (imageBuffers.length === 0) {
-      return res.status(400).json({ error: "No valid images found" });
-    }
-
-    // Create 3x2 grid composite image
-    let composite;
     const canvasWidth = 1200;
     const canvasHeight = 630;
     const cellWidth = canvasWidth / 3;
     const cellHeight = canvasHeight / 2;
 
-    // Prepare all images for the grid
-    const processedImages = await Promise.all(
-      imageBuffers.slice(0, 6).map(async (buffer, index) => {
-        return await sharp(buffer)
+    // Helper function to process a single image with memory cleanup
+    async function processImage(imageUrl, index) {
+      let imageBuffer = null;
+      try {
+        if (!imageUrl.startsWith(baseUrl)) return null;
+
+        const response = await fetch(imageUrl);
+        if (!response.ok) return null;
+
+        const arrayBuffer = await response.arrayBuffer();
+        imageBuffer = Buffer.from(arrayBuffer);
+
+        // Process image immediately and return processed buffer
+        const processedBuffer = await sharp(imageBuffer)
           .resize(cellWidth, cellHeight, {
             fit: "cover",
             position: "center",
             withoutEnlargement: false
           })
           .toBuffer();
-      })
-    );
+
+        // Clean up original buffer immediately
+        imageBuffer = null;
+
+        return processedBuffer;
+      } catch (error) {
+        console.error(`[DEBUG] Error processing image ${imageUrl}:`, error);
+        return null;
+      } finally {
+        // Explicit cleanup
+        imageBuffer = null;
+        if (global.gc) global.gc();
+      }
+    }
+
+    // Process images in batches of MAX_IMAGE_BUFFERS_IN_MEMORY
+    const processedImages = [];
+    for (
+      let i = 0;
+      i < Math.min(images.length, 6);
+      i += MAX_IMAGE_BUFFERS_IN_MEMORY
+    ) {
+      const batch = images.slice(i, i + MAX_IMAGE_BUFFERS_IN_MEMORY);
+      const batchResults = await Promise.all(
+        batch.map((imageUrl) => processImage(imageUrl, i))
+      );
+
+      // Add non-null results
+      processedImages.push(...batchResults.filter((img) => img !== null));
+
+      // Clean up batch results from memory
+      for (let result of batchResults) {
+        result = null;
+      }
+    }
+
+    if (processedImages.length === 0) {
+      return res.status(400).json({ error: "No valid images found" });
+    }
 
     // Create composite with 3x2 grid layout
     const compositeInputs = [];
@@ -1615,22 +1835,29 @@ app.get("/person/:personName/share-image", async (req, res) => {
       }
     }).composite(compositeInputs);
 
-    // Generate final image
-    const outputBuffer = await composite.jpeg({ quality: 85 }).toBuffer();
+    // Generate final image and save directly to file
+    await composite.jpeg({ quality: 85 }).toFile(cachePath);
+    console.log(`Person share image generated and saved to: ${cachePath}`);
 
-    // Cache the generated image
-    saveShareImageToCache(cachePath, outputBuffer);
+    // Clean up processed images from memory immediately
+    processedImages.forEach((img, index) => {
+      processedImages[index] = null;
+    });
+    processedImages.length = 0;
+    composite = null;
 
-    // Set headers to serve the image directly
+    // Trigger garbage collection
+    if (global.gc) global.gc();
+
+    // Stream the file from disk - no need to keep in memory
     res.set({
       "Content-Type": "image/jpeg",
-      "Content-Length": outputBuffer.length,
       "Cache-Control": "public, max-age=3600", // Cache for 1 hour
       "Content-Disposition": `inline; filename="${personName}-share.jpg"`
     });
 
-    // Send the image buffer directly
-    res.send(outputBuffer);
+    const fileStream = fs.createReadStream(cachePath);
+    fileStream.pipe(res);
   } catch (error) {
     console.error("Error generating person share image:", error);
     res.status(500).json({ error: "Internal server error" });
@@ -1643,17 +1870,16 @@ app.get("/space/share-image", async (req, res) => {
     // Check if we have a valid cached version
     const cachePath = getShareImageCachePath("space");
     if (isShareImageCacheValid(cachePath)) {
-      const cachedImage = loadShareImageFromCache(cachePath);
-      if (cachedImage) {
-        console.log("Serving cached space share image");
-        res.set({
-          "Content-Type": "image/jpeg",
-          "Content-Length": cachedImage.length,
-          "Cache-Control": "public, max-age=3600", // Cache for 1 hour
-          "Content-Disposition": `inline; filename="space-share.jpg"`
-        });
-        return res.send(cachedImage);
-      }
+      console.log("Serving cached space share image from file");
+      res.set({
+        "Content-Type": "image/jpeg",
+        "Cache-Control": "public, max-age=3600", // Cache for 1 hour
+        "Content-Disposition": `inline; filename="space-share.jpg"`
+      });
+      // Stream file directly from disk - no memory buffering
+      const fileStream = fs.createReadStream(cachePath);
+      fileStream.pipe(res);
+      return;
     }
 
     console.log("Generating new space share image");
@@ -1684,32 +1910,34 @@ app.get("/space/share-image", async (req, res) => {
       return res.status(400).json({ error: "No valid studio photo found" });
     }
 
-    // Resize image to standard share image dimensions
+    // Resize image to standard share image dimensions and save directly to file
     const canvasWidth = 1200;
     const canvasHeight = 630;
 
-    const outputBuffer = await sharp(imageBuffer)
+    await sharp(imageBuffer)
       .resize(canvasWidth, canvasHeight, {
         fit: "cover",
         position: "center",
         withoutEnlargement: false
       })
       .jpeg({ quality: 85 })
-      .toBuffer();
+      .toFile(cachePath);
 
-    // Cache the generated image
-    saveShareImageToCache(cachePath, outputBuffer);
+    console.log(`Space share image generated and saved to: ${cachePath}`);
 
-    // Set headers to serve the image directly
+    // Clean up buffer immediately
+    imageBuffer = null;
+    if (global.gc) global.gc();
+
+    // Stream the file from disk - no need to keep in memory
     res.set({
       "Content-Type": "image/jpeg",
-      "Content-Length": outputBuffer.length,
       "Cache-Control": "public, max-age=3600", // Cache for 1 hour
       "Content-Disposition": `inline; filename="space-share.jpg"`
     });
 
-    // Send the image buffer directly
-    res.send(outputBuffer);
+    const fileStream = fs.createReadStream(cachePath);
+    fileStream.pipe(res);
   } catch (error) {
     console.error("Error generating space share image:", error);
     res.status(500).json({ error: "Internal server error" });
