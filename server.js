@@ -553,9 +553,16 @@ function saveCacheToFile(projects) {
 function getProjectsFromFile() {
   try {
     if (fs.existsSync(CACHE_FILE)) {
-      const cacheData = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
+      // Read file and immediately parse - don't keep the string in memory
+      const fileContent = fs.readFileSync(CACHE_FILE, "utf8");
+      const cacheData = JSON.parse(fileContent);
       lastCacheUpdate = cacheData.lastUpdate;
-      return cacheData.projects || [];
+      const projects = cacheData.projects || [];
+
+      // Clear references to help GC
+      cacheData.projects = null;
+
+      return projects;
     }
   } catch (error) {
     console.error("Error loading projects from file:", error);
@@ -1059,8 +1066,24 @@ app.get("/admin/memory-status", authenticateAdmin, (req, res) => {
     console.error("Error reading cache directory:", error);
   }
 
+  // Estimate base overhead (Node.js + dependencies)
+  const estimatedBaseOverhead = 40; // MB - Node.js, V8, Sharp, Express, etc.
+  const yourDataApprox = Math.max(0, memory.rss - estimatedBaseOverhead);
+
   res.json({
-    memory: memory,
+    summary: {
+      rssTotal: `${memory.rss}MB (total process memory)`,
+      heapUsed: `${memory.heapUsed}MB (your actual data)`,
+      estimatedBaseOverhead: `~${estimatedBaseOverhead}MB (Node.js + Sharp + Express)`,
+      yourDataEstimate: `~${yourDataApprox}MB`
+    },
+    breakdown: {
+      rss: memory.rss,
+      heapUsed: memory.heapUsed,
+      heapTotal: memory.heapTotal,
+      external: memory.external,
+      arrayBuffers: memory.arrayBuffers
+    },
     memoryPressure: Math.round(memoryPressure * 100),
     memoryPressureLevel:
       memoryPressure > 0.9
@@ -1075,6 +1098,7 @@ app.get("/admin/memory-status", authenticateAdmin, (req, res) => {
       maxImageBuffersInMemory: MAX_IMAGE_BUFFERS_IN_MEMORY
     },
     projectsCache: {
+      inMemory: false,
       hasFileCache: fs.existsSync(CACHE_FILE),
       lastUpdate: lastCacheUpdate
         ? new Date(lastCacheUpdate).toISOString()
@@ -1085,7 +1109,13 @@ app.get("/admin/memory-status", authenticateAdmin, (req, res) => {
       totalSizeMB: Math.round(cachedFilesSize / 1024 / 1024),
       cacheDirectory: SHARE_IMAGE_CACHE_DIR
     },
-    gcAvailable: !!global.gc
+    gcAvailable: !!global.gc,
+    notes: [
+      "RSS (Resident Set Size) includes Node.js runtime + all loaded libraries",
+      "Sharp image library alone uses ~20-30MB",
+      "Heap Used is your actual application data",
+      "No projects data is cached in memory - loaded from file per request"
+    ]
   });
 });
 
@@ -1093,9 +1123,10 @@ app.get("/admin/memory-status", authenticateAdmin, (req, res) => {
 app.post("/admin/memory-cleanup", authenticateAdmin, (req, res) => {
   const beforeMemory = getMemoryUsage();
 
-  // Force garbage collection if available
+  // Force aggressive garbage collection if available
   if (global.gc) {
     global.gc();
+    global.gc(); // Call twice to be thorough
   }
 
   const afterMemory = getMemoryUsage();
@@ -1107,7 +1138,49 @@ app.post("/admin/memory-cleanup", authenticateAdmin, (req, res) => {
     beforeMemory,
     afterMemory,
     freedMemoryMB: Math.max(0, freedMB),
-    gcTriggered: !!global.gc
+    gcTriggered: !!global.gc,
+    note: global.gc
+      ? "Run with --expose-gc flag"
+      : "GC not available - restart with: node --expose-gc server.js"
+  });
+});
+
+// Heap snapshot diagnostic endpoint
+app.get("/admin/heap-diagnostic", authenticateAdmin, (req, res) => {
+  // Trigger GC first to get accurate reading
+  if (global.gc) {
+    global.gc();
+  }
+
+  const memory = getMemoryUsage();
+
+  // Load a test file to see impact
+  const beforeHeap = process.memoryUsage().heapUsed;
+  const testProjects = getProjectsFromFile();
+  const afterHeap = process.memoryUsage().heapUsed;
+  const loadImpact = Math.round((afterHeap - beforeHeap) / 1024 / 1024);
+
+  // Clear it
+  testProjects.length = 0;
+
+  res.json({
+    currentMemory: memory,
+    comparison: {
+      typicalNodeApp: "21-26MB",
+      withSharp: "~45-55MB expected",
+      yourActual: `${memory.rss}MB`,
+      excess: `${Math.max(0, memory.rss - 55)}MB unexplained`
+    },
+    fileLoadTest: {
+      impactMB: loadImpact,
+      note: "Memory used when loading projects-cache.json"
+    },
+    recommendations: [
+      "Check if projects-cache.json is very large",
+      "Restart with --expose-gc: node --expose-gc server.js",
+      "Run POST /admin/memory-cleanup to trigger GC",
+      "Check PM2 logs for any memory warnings"
+    ]
   });
 });
 
@@ -1961,4 +2034,14 @@ loadCacheMetadata();
 
 app.listen(port, () => {
   console.log(`Server is running at http://localhost:${port}`);
+
+  // Log initial memory usage after startup
+  setTimeout(() => {
+    logMemoryUsage("Server startup complete");
+    const memory = getMemoryUsage();
+    console.log(
+      `[INFO] RSS includes Node.js runtime + libraries (~40-50MB base overhead)`
+    );
+    console.log(`[INFO] Heap (your data) is only: ${memory.heapUsed}MB`);
+  }, 1000);
 });
