@@ -62,12 +62,15 @@ function authenticateAdmin(req, res, next) {
 }
 
 // Cache configuration
-const CACHE_FILE = "projects-cache.json";
+const CACHE_FILE = "projects-cache.json"; // Internal cache with metadata
+const PROJECTS_SORTED_FILE = "projects-sorted.json"; // Sorted projects for serving
+const PROJECTS_DIR = "projects"; // Individual project JSON files
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes in milliseconds
 const MAX_PROJECTS_CACHE_SIZE = 50 * 1024 * 1024; // 50MB limit for projects cache
 const MAX_IMAGE_BUFFERS_IN_MEMORY = 3; // Max concurrent image buffers for processing
 
-// Cache metadata only (no large data in memory)
+// Single in-memory cache (one copy only, not per-request)
+let projectsCache = null;
 let lastCacheUpdate = null;
 let isUpdatingCache = false;
 
@@ -537,37 +540,54 @@ async function fetchProjectsFromRemote() {
 // Function to save cache to file
 function saveCacheToFile(projects) {
   try {
+    // Save full cache with metadata
     const cacheData = {
       projects: projects,
       lastUpdate: Date.now(),
       timestamp: new Date().toISOString()
     };
     fs.writeFileSync(CACHE_FILE, JSON.stringify(cacheData, null, 2));
-    console.log(`Projects cache saved: ${projects.length} projects`);
+
+    // Save sorted projects array for direct serving (no metadata wrapper)
+    const sortedProjects = sortProjectsByDate(projects);
+    fs.writeFileSync(
+      PROJECTS_SORTED_FILE,
+      JSON.stringify(sortedProjects, null, 2)
+    );
+
+    // Ensure projects directory exists
+    if (!fs.existsSync(PROJECTS_DIR)) {
+      fs.mkdirSync(PROJECTS_DIR, { recursive: true });
+    }
+
+    // Save each project as an individual file
+    projects.forEach((project) => {
+      const projectFile = path.join(PROJECTS_DIR, `${project.id}.json`);
+      fs.writeFileSync(projectFile, JSON.stringify(project, null, 2));
+    });
+
+    console.log(
+      `Projects cache saved: ${projects.length} projects (+ individual files)`
+    );
   } catch (error) {
     console.error("Error saving cache to file:", error);
   }
 }
 
-// Function to load projects from file cache
-function getProjectsFromFile() {
+// Function to load projects from file cache (loads into in-memory cache)
+function loadProjectsFromFile() {
   try {
     if (fs.existsSync(CACHE_FILE)) {
-      // Read file and immediately parse - don't keep the string in memory
-      const fileContent = fs.readFileSync(CACHE_FILE, "utf8");
-      const cacheData = JSON.parse(fileContent);
+      const cacheData = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
+      projectsCache = cacheData.projects || [];
       lastCacheUpdate = cacheData.lastUpdate;
-      const projects = cacheData.projects || [];
-
-      // Clear references to help GC
-      cacheData.projects = null;
-
-      return projects;
+      console.log(`Loaded ${projectsCache.length} projects into memory cache`);
+      return true;
     }
   } catch (error) {
     console.error("Error loading projects from file:", error);
   }
-  return null;
+  return false;
 }
 
 // Function to load cache metadata on startup
@@ -587,6 +607,27 @@ function loadCacheMetadata() {
     console.error("Error loading cache metadata:", error);
   }
   return false;
+}
+
+// Get projects (from memory cache or load if needed)
+function getProjects() {
+  if (!projectsCache) {
+    loadProjectsFromFile();
+  }
+  return projectsCache;
+}
+
+// Function to get projects from file (without loading into memory cache)
+function getProjectsFromFile() {
+  try {
+    if (fs.existsSync(CACHE_FILE)) {
+      const cacheData = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
+      return cacheData.projects || [];
+    }
+  } catch (error) {
+    console.error("Error reading projects from file:", error);
+  }
+  return null;
 }
 
 // Function to ensure share image cache directory exists
@@ -751,9 +792,10 @@ async function updateCacheInBackground() {
   isUpdatingCache = true;
   try {
     const newProjects = await fetchProjectsFromRemote();
+    projectsCache = newProjects; // Update in-memory copy
     lastCacheUpdate = Date.now();
 
-    // Save to file (no in-memory storage)
+    // Save to files (creates both projects-cache.json and projects.json)
     saveCacheToFile(newProjects);
 
     // Clear share image cache since projects data has changed
@@ -769,30 +811,22 @@ async function updateCacheInBackground() {
 
 app.get("/projects", async (req, res) => {
   try {
-    // Try to load from file cache first
-    let projects = getProjectsFromFile();
+    // Serve the static sorted JSON file directly - zero memory!
+    if (fs.existsSync(PROJECTS_SORTED_FILE)) {
+      res.sendFile(path.resolve(PROJECTS_SORTED_FILE));
 
-    if (projects) {
-      res.json(sortProjectsByDate(projects));
       // Update cache in background if stale
       updateCacheInBackground();
     } else {
       // No cache available - fetch fresh data
-      projects = await fetchProjectsFromRemote();
+      const freshProjects = await fetchProjectsFromRemote();
       lastCacheUpdate = Date.now();
-      saveCacheToFile(projects);
-      res.json(sortProjectsByDate(projects));
+      saveCacheToFile(freshProjects); // This creates projects-sorted.json
+      res.sendFile(path.resolve(PROJECTS_SORTED_FILE));
     }
   } catch (error) {
-    console.error("Error reading projects:", error);
-
-    // Try fallback to file cache
-    const fallbackProjects = getProjectsFromFile();
-    if (fallbackProjects) {
-      res.json(sortProjectsByDate(fallbackProjects));
-    } else {
-      res.status(500).json({ error: "Failed to read projects" });
-    }
+    console.error("Error serving projects:", error);
+    res.status(500).json({ error: "Failed to serve projects" });
   }
 });
 
@@ -817,51 +851,42 @@ app.get("/homepage/prerender", async (req, res) => {
 app.get("/projects/:projectId", async (req, res) => {
   try {
     const { projectId } = req.params;
+    const projectFile = path.join(PROJECTS_DIR, `${projectId}.json`);
 
-    // Load from file
-    let projects = getProjectsFromFile();
-
-    if (projects) {
-      const project = projects.find((p) => p.id === projectId);
-
-      if (project) {
-        res.json(project);
-      } else {
-        res.status(404).json({ error: "Project not found" });
-      }
+    // Serve the individual project file directly - zero memory!
+    if (fs.existsSync(projectFile)) {
+      res.sendFile(path.resolve(projectFile));
 
       // Update cache in background if stale
       updateCacheInBackground();
     } else {
-      // No cache available - fetch fresh data
-      projects = await fetchProjectsFromRemote();
-      lastCacheUpdate = Date.now();
-      saveCacheToFile(projects);
-
-      const project = projects.find((p) => p.id === projectId);
-      if (project) {
-        res.json(project);
+      // Project file doesn't exist - maybe cache is stale or invalid ID
+      const projects = getProjects();
+      if (projects) {
+        const project = projects.find((p) => p.id === projectId);
+        if (project) {
+          res.json(project);
+        } else {
+          res.status(404).json({ error: "Project not found" });
+        }
       } else {
-        res.status(404).json({ error: "Project not found" });
+        // No cache - fetch fresh
+        const freshProjects = await fetchProjectsFromRemote();
+        projectsCache = freshProjects;
+        lastCacheUpdate = Date.now();
+        saveCacheToFile(freshProjects);
+
+        const project = freshProjects.find((p) => p.id === projectId);
+        if (project) {
+          res.json(project);
+        } else {
+          res.status(404).json({ error: "Project not found" });
+        }
       }
     }
   } catch (error) {
     console.error(`Error reading project ${req.params.projectId}:`, error);
-
-    // Try fallback to file
-    const fallbackProjects = getProjectsFromFile();
-    if (fallbackProjects) {
-      const project = fallbackProjects.find(
-        (p) => p.id === req.params.projectId
-      );
-      if (project) {
-        res.json(project);
-      } else {
-        res.status(404).json({ error: "Project not found" });
-      }
-    } else {
-      res.status(500).json({ error: "Failed to read project" });
-    }
+    res.status(500).json({ error: "Failed to read project" });
   }
 });
 
@@ -870,8 +895,8 @@ app.get("/projects/person/:personName", async (req, res) => {
   try {
     const { personName } = req.params;
 
-    // Load from file
-    let projects = getProjectsFromFile();
+    // Get from in-memory cache
+    const projects = getProjects();
 
     if (projects) {
       const personProjects = filterProjectsByPerson(projects, personName);
@@ -881,11 +906,12 @@ app.get("/projects/person/:personName", async (req, res) => {
       updateCacheInBackground();
     } else {
       // No cache available - fetch fresh data
-      projects = await fetchProjectsFromRemote();
+      const freshProjects = await fetchProjectsFromRemote();
+      projectsCache = freshProjects;
       lastCacheUpdate = Date.now();
-      saveCacheToFile(projects);
+      saveCacheToFile(freshProjects);
 
-      const personProjects = filterProjectsByPerson(projects, personName);
+      const personProjects = filterProjectsByPerson(freshProjects, personName);
       res.json(sortProjectsByDate(personProjects));
     }
   } catch (error) {
@@ -911,8 +937,8 @@ app.get("/projects/person/:personName", async (req, res) => {
 // Get all unique tags from projects
 app.get("/tags", async (req, res) => {
   try {
-    // Load from file
-    let projects = getProjectsFromFile();
+    // Get from in-memory cache
+    const projects = getProjects();
 
     if (projects) {
       const tags = getAllTags(projects);
@@ -922,11 +948,12 @@ app.get("/tags", async (req, res) => {
       updateCacheInBackground();
     } else {
       // No cache available - fetch fresh data
-      projects = await fetchProjectsFromRemote();
+      const freshProjects = await fetchProjectsFromRemote();
+      projectsCache = freshProjects;
       lastCacheUpdate = Date.now();
-      saveCacheToFile(projects);
+      saveCacheToFile(freshProjects);
 
-      const tags = getAllTags(projects);
+      const tags = getAllTags(freshProjects);
       res.json(tags);
     }
   } catch (error) {
@@ -948,8 +975,8 @@ app.get("/projects/tag/:tagName", async (req, res) => {
   try {
     const { tagName } = req.params;
 
-    // Load from file
-    let projects = getProjectsFromFile();
+    // Get from in-memory cache
+    const projects = getProjects();
 
     if (projects) {
       const tagProjects = filterProjectsByTag(projects, tagName);
@@ -959,11 +986,12 @@ app.get("/projects/tag/:tagName", async (req, res) => {
       updateCacheInBackground();
     } else {
       // No cache available - fetch fresh data
-      projects = await fetchProjectsFromRemote();
+      const freshProjects = await fetchProjectsFromRemote();
+      projectsCache = freshProjects;
       lastCacheUpdate = Date.now();
-      saveCacheToFile(projects);
+      saveCacheToFile(freshProjects);
 
-      const tagProjects = filterProjectsByTag(projects, tagName);
+      const tagProjects = filterProjectsByTag(freshProjects, tagName);
       res.json(sortProjectsByDate(tagProjects));
     }
   } catch (error) {
@@ -1050,8 +1078,8 @@ app.get("/projects/prerender/:projectId", async (req, res) => {
   try {
     const { projectId } = req.params;
 
-    // Load from file
-    let projects = getProjectsFromFile();
+    // Get from in-memory cache
+    const projects = getProjects();
 
     if (projects) {
       const project = projects.find((p) => p.id === projectId);
@@ -1098,8 +1126,8 @@ app.get("/projects/prerender/tag/:tagName", async (req, res) => {
   try {
     const { tagName } = req.params;
 
-    // Load from file
-    const projects = getProjectsFromFile();
+    // Get from in-memory cache
+    const projects = getProjects();
 
     if (!projects) {
       // If no cache, generate basic HTML without project count
@@ -1133,8 +1161,8 @@ app.get("/projects/prerender/person/:personName", async (req, res) => {
   try {
     const { personName } = req.params;
 
-    // Load from file
-    const projects = getProjectsFromFile();
+    // Get from in-memory cache
+    const projects = getProjects();
 
     if (!projects) {
       // If no cache, generate basic HTML without project count
@@ -1436,7 +1464,7 @@ app.get("/homepage/share-image", async (req, res) => {
       }
     }
 
-    composite = sharp({
+    let composite = sharp({
       create: {
         width: canvasWidth,
         height: canvasHeight,
@@ -1467,10 +1495,18 @@ app.get("/homepage/share-image", async (req, res) => {
     });
 
     const fileStream = fs.createReadStream(cachePath);
+    fileStream.on("error", (err) => {
+      console.error("Error streaming generated file:", err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Failed to stream generated image" });
+      }
+    });
     fileStream.pipe(res);
   } catch (error) {
     console.error("Error generating homepage share image:", error);
-    res.status(500).json({ error: "Internal server error" });
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Internal server error" });
+    }
   }
 });
 
@@ -1490,6 +1526,12 @@ app.get("/tag/:tagName/share-image", async (req, res) => {
       });
       // Stream file directly from disk - no memory buffering
       const fileStream = fs.createReadStream(cachePath);
+      fileStream.on("error", (err) => {
+        console.error("Error streaming cached file:", err);
+        if (!res.headersSent) {
+          res.status(500).json({ error: "Failed to stream cached image" });
+        }
+      });
       fileStream.pipe(res);
       return;
     }
@@ -1603,7 +1645,7 @@ app.get("/tag/:tagName/share-image", async (req, res) => {
       }
     }
 
-    composite = sharp({
+    let composite = sharp({
       create: {
         width: canvasWidth,
         height: canvasHeight,
@@ -1634,10 +1676,18 @@ app.get("/tag/:tagName/share-image", async (req, res) => {
     });
 
     const fileStream = fs.createReadStream(cachePath);
+    fileStream.on("error", (err) => {
+      console.error("Error streaming generated file:", err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Failed to stream generated image" });
+      }
+    });
     fileStream.pipe(res);
   } catch (error) {
     console.error("Error generating tag share image:", error);
-    res.status(500).json({ error: "Internal server error" });
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Internal server error" });
+    }
   }
 });
 
@@ -1657,6 +1707,12 @@ app.get("/person/:personName/share-image", async (req, res) => {
       });
       // Stream file directly from disk - no memory buffering
       const fileStream = fs.createReadStream(cachePath);
+      fileStream.on("error", (err) => {
+        console.error("Error streaming cached file:", err);
+        if (!res.headersSent) {
+          res.status(500).json({ error: "Failed to stream cached image" });
+        }
+      });
       fileStream.pipe(res);
       return;
     }
@@ -1770,7 +1826,7 @@ app.get("/person/:personName/share-image", async (req, res) => {
       }
     }
 
-    composite = sharp({
+    let composite = sharp({
       create: {
         width: canvasWidth,
         height: canvasHeight,
@@ -1801,10 +1857,18 @@ app.get("/person/:personName/share-image", async (req, res) => {
     });
 
     const fileStream = fs.createReadStream(cachePath);
+    fileStream.on("error", (err) => {
+      console.error("Error streaming generated file:", err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Failed to stream generated image" });
+      }
+    });
     fileStream.pipe(res);
   } catch (error) {
     console.error("Error generating person share image:", error);
-    res.status(500).json({ error: "Internal server error" });
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Internal server error" });
+    }
   }
 });
 
@@ -1822,6 +1886,12 @@ app.get("/space/share-image", async (req, res) => {
       });
       // Stream file directly from disk - no memory buffering
       const fileStream = fs.createReadStream(cachePath);
+      fileStream.on("error", (err) => {
+        console.error("Error streaming cached file:", err);
+        if (!res.headersSent) {
+          res.status(500).json({ error: "Failed to stream cached image" });
+        }
+      });
       fileStream.pipe(res);
       return;
     }
@@ -1878,10 +1948,18 @@ app.get("/space/share-image", async (req, res) => {
     });
 
     const fileStream = fs.createReadStream(cachePath);
+    fileStream.on("error", (err) => {
+      console.error("Error streaming generated file:", err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Failed to stream generated image" });
+      }
+    });
     fileStream.pipe(res);
   } catch (error) {
     console.error("Error generating space share image:", error);
-    res.status(500).json({ error: "Internal server error" });
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Internal server error" });
+    }
   }
 });
 
