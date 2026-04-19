@@ -1256,7 +1256,8 @@ app.get("/about/prerender", async (req, res) => {
   try {
     const title = "FCC Studio – About";
     const description = SITE_DESCRIPTION;
-    const shareImageUrl = `${API_URL}/homepage/share-image`;
+    const shareImageUrl =
+      "https://static.fcc.lol/studio-photos/IMG_8796.jpeg";
     const aboutUrl = `${BASE_URL}/about`;
 
     const html = generateHtml(
