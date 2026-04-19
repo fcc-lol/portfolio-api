@@ -7,6 +7,9 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import dotenv from "dotenv";
 import sharp from "sharp";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { z } from "zod";
 
 // Load environment variables
 dotenv.config();
@@ -1962,6 +1965,194 @@ app.get("/space/share-image", async (req, res) => {
     }
   }
 });
+
+// ----- MCP server (Streamable HTTP) -----
+
+// Ensure projects are available, fetching fresh if no cache exists
+async function ensureProjects() {
+  let projects = getProjects();
+  if (!projects) {
+    projects = await fetchProjectsFromRemote();
+    projectsCache = projects;
+    lastCacheUpdate = Date.now();
+    saveCacheToFile(projects);
+  }
+  return projects;
+}
+
+// Trim a project down to a list-friendly summary (no media array, no image dims)
+function summarizeProject(project) {
+  return {
+    id: project.id,
+    title: project.title || project.name || null,
+    description: project.description || null,
+    date: project.date || null,
+    tags: project.tags || [],
+    credits: project.credits || [],
+    primaryImage: project.primaryImage?.url || null,
+    url: `${BASE_URL}/${project.id}`
+  };
+}
+
+function jsonResult(value) {
+  return {
+    content: [{ type: "text", text: JSON.stringify(value, null, 2) }]
+  };
+}
+
+function createMcpServer() {
+  const server = new McpServer({
+    name: "fcc-portfolio",
+    version: "1.0.0"
+  });
+
+  server.registerTool(
+    "list_projects",
+    {
+      title: "List projects",
+      description:
+        "List FCC Studio projects (summarized: id, title, description, date, tags, credits, primary image url). Optionally filter by tag and/or person credit. Sorted newest first.",
+      inputSchema: {
+        tag: z
+          .string()
+          .optional()
+          .describe("Filter to projects containing this tag (case-insensitive)."),
+        person: z
+          .string()
+          .optional()
+          .describe(
+            "Filter to projects crediting this person (case-insensitive name match)."
+          )
+      }
+    },
+    async ({ tag, person } = {}) => {
+      let projects = await ensureProjects();
+      if (tag) projects = filterProjectsByTag(projects, tag);
+      if (person) projects = filterProjectsByPerson(projects, person);
+      const sorted = sortProjectsByDate(projects);
+      updateCacheInBackground();
+      return jsonResult(sorted.map(summarizeProject));
+    }
+  );
+
+  server.registerTool(
+    "get_project",
+    {
+      title: "Get project",
+      description:
+        "Get the full details of a single project by id, including the full media list (images, videos, notes).",
+      inputSchema: {
+        id: z.string().describe("The project id (folder name in portfolio storage).")
+      }
+    },
+    async ({ id }) => {
+      const projects = await ensureProjects();
+      const project = projects.find((p) => p.id === id);
+      updateCacheInBackground();
+      if (!project) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: `Project "${id}" not found.` }]
+        };
+      }
+      return jsonResult(project);
+    }
+  );
+
+  server.registerTool(
+    "list_tags",
+    {
+      title: "List tags",
+      description:
+        "List all tags used across projects, with the number of projects per tag, sorted by frequency.",
+      inputSchema: {}
+    },
+    async () => {
+      const projects = await ensureProjects();
+      const counts = new Map();
+      for (const project of projects) {
+        if (!Array.isArray(project.tags)) continue;
+        for (const tag of project.tags) {
+          if (typeof tag !== "string") continue;
+          const t = tag.trim();
+          if (!t) continue;
+          counts.set(t, (counts.get(t) || 0) + 1);
+        }
+      }
+      const result = Array.from(counts.entries())
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([name, count]) => ({ name, count }));
+      updateCacheInBackground();
+      return jsonResult(result);
+    }
+  );
+
+  server.registerTool(
+    "list_people",
+    {
+      title: "List people",
+      description:
+        "List everyone credited on projects, with the number of projects each person is credited on, sorted by frequency.",
+      inputSchema: {}
+    },
+    async () => {
+      const projects = await ensureProjects();
+      const counts = new Map();
+      for (const project of projects) {
+        if (!Array.isArray(project.credits)) continue;
+        for (const credit of project.credits) {
+          const name = credit?.name;
+          if (typeof name !== "string") continue;
+          const trimmed = name.trim();
+          if (!trimmed) continue;
+          counts.set(trimmed, (counts.get(trimmed) || 0) + 1);
+        }
+      }
+      const result = Array.from(counts.entries())
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([name, count]) => ({ name, count }));
+      updateCacheInBackground();
+      return jsonResult(result);
+    }
+  );
+
+  return server;
+}
+
+// Stateless Streamable HTTP transport: new server + transport per request
+app.post("/mcp", express.json({ limit: "1mb" }), async (req, res) => {
+  try {
+    const server = createMcpServer();
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined
+    });
+    res.on("close", () => {
+      transport.close();
+      server.close();
+    });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (error) {
+    console.error("MCP request error:", error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        jsonrpc: "2.0",
+        error: { code: -32603, message: "Internal server error" },
+        id: null
+      });
+    }
+  }
+});
+
+const mcpMethodNotAllowed = (req, res) => {
+  res.status(405).json({
+    jsonrpc: "2.0",
+    error: { code: -32000, message: "Method not allowed." },
+    id: null
+  });
+};
+app.get("/mcp", mcpMethodNotAllowed);
+app.delete("/mcp", mcpMethodNotAllowed);
 
 // Load cache metadata on startup (not full data)
 loadCacheMetadata();

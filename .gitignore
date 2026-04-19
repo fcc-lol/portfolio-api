@@ -3,4 +3,6 @@
 node_modules/
 output.log
 projects-cache.json
+projects-sorted.json
+projects/
 share-images/
