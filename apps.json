@@ -1,0 +1,65 @@
+[
+  {
+    "id": "poetry-cam",
+    "name": "Poetry Cam",
+    "description": "Turn photos into poetry",
+    "url": "https://poetrycam.adanmade.app/",
+    "iconUrl": "https://poetrycam.adanmade.app/icon.svg"
+  },
+  {
+    "id": "marqueue",
+    "name": "Marqueue",
+    "description": "Track movies to watch",
+    "url": "https://marqueue.zach.coffee",
+    "iconUrl": "https://marqueue.zach.coffee/apple-touch-icon.png"
+  },
+  {
+    "id": "cloud",
+    "name": "Cloud",
+    "description": "Share your day",
+    "url": "https://cloud.leo.gd",
+    "iconUrl": "https://cloud.leo.gd/icons/icon-180.png"
+  },
+  {
+    "id": "lists",
+    "name": "Lists App",
+    "description": "Create and share lists",
+    "url": "https://lists.fcc.lol",
+    "iconUrl": "https://lists.fcc.lol/apple-touch-icon.png"
+  },
+  {
+    "id": "wave",
+    "name": "Wave",
+    "description": "Share your trip",
+    "url": "https://wave.leo.gd",
+    "iconUrl": "https://wave.leo.gd/images/app-icons/180.png"
+  },
+  {
+    "id": "local-news-reader",
+    "name": "Local News Reader",
+    "description": "Know what's happening",
+    "url": "https://local-news-reader.noshado.ws/long-island-city",
+    "iconUrl": "https://local-news-reader.noshado.ws/apple-touch-icon.png"
+  },
+  {
+    "id": "split",
+    "name": "Split",
+    "description": "Track group expenses",
+    "url": "https://split.noshado.ws/",
+    "iconUrl": "https://split.noshado.ws/icon.svg"
+  },
+  {
+    "id": "share-the-pie",
+    "name": "Share the Pie",
+    "description": "Split a group receipt",
+    "url": "https://sharethepie.app/",
+    "iconUrl": "https://sharethepie.app/apple-icon.png"
+  },
+  {
+    "id": "mosaic",
+    "name": "Mosaic",
+    "description": "Create visual artifacts",
+    "url": "https://mosaic.fcc.lol",
+    "iconUrl": null
+  }
+]

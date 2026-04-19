@@ -837,6 +837,17 @@ app.get("/projects", async (req, res) => {
   }
 });
 
+const APPS_FILE = "apps.json";
+
+app.get("/apps", (req, res) => {
+  try {
+    res.sendFile(path.resolve(APPS_FILE));
+  } catch (error) {
+    console.error("Error serving apps:", error);
+    res.status(500).json({ error: "Failed to serve apps" });
+  }
+});
+
 // Homepage prerender route for social media crawlers
 app.get("/homepage/prerender", async (req, res) => {
   try {
