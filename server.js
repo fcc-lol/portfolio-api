@@ -80,6 +80,9 @@ let isUpdatingCache = false;
 // File-based cache directory for share images (no in-memory caching)
 const SHARE_IMAGE_CACHE_DIR = "share-images";
 
+// File-based cache directory for MCP media thumbnails (1024px/q75 JPEG)
+const MCP_THUMBNAIL_CACHE_DIR = "mcp-thumbnails";
+
 // Memory monitoring functions
 function getMemoryUsage() {
   const memUsage = process.memoryUsage();
@@ -803,6 +806,7 @@ async function updateCacheInBackground() {
 
     // Clear share image cache since projects data has changed
     clearShareImageCache();
+    clearMcpThumbnailCache();
 
     console.log("Cache updated successfully");
   } catch (error) {
@@ -1036,6 +1040,7 @@ app.get("/admin/refresh-cache", authenticateAdmin, async (req, res) => {
 
     // Clear share image cache since projects data has changed
     clearShareImageCache();
+    clearMcpThumbnailCache();
 
     console.log("Manual cache refresh completed successfully");
     res.json({
@@ -1966,6 +1971,88 @@ app.get("/space/share-image", async (req, res) => {
   }
 });
 
+// ----- MCP media thumbnails -----
+
+function ensureMcpThumbnailCacheDir() {
+  try {
+    if (!fs.existsSync(MCP_THUMBNAIL_CACHE_DIR)) {
+      fs.mkdirSync(MCP_THUMBNAIL_CACHE_DIR, { recursive: true });
+    }
+  } catch (error) {
+    console.error("Error creating MCP thumbnail cache directory:", error);
+  }
+}
+
+function getMcpThumbnailPath(projectId, filename) {
+  ensureMcpThumbnailCacheDir();
+  const safeProject = projectId.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return path.join(
+    MCP_THUMBNAIL_CACHE_DIR,
+    `${safeProject}__${safeFilename}.jpg`
+  );
+}
+
+function isMcpThumbnailCacheValid(cachePath) {
+  try {
+    if (!fs.existsSync(cachePath)) return false;
+    const cacheTime = fs.statSync(cachePath).mtime.getTime();
+    return lastCacheUpdate && cacheTime > lastCacheUpdate;
+  } catch {
+    return false;
+  }
+}
+
+function clearMcpThumbnailCache() {
+  try {
+    if (!fs.existsSync(MCP_THUMBNAIL_CACHE_DIR)) return;
+    const files = fs.readdirSync(MCP_THUMBNAIL_CACHE_DIR);
+    for (const file of files) {
+      fs.unlinkSync(path.join(MCP_THUMBNAIL_CACHE_DIR, file));
+    }
+    console.log(`MCP thumbnail cache cleared: ${files.length} files deleted`);
+  } catch (error) {
+    console.error("Error clearing MCP thumbnail cache:", error);
+  }
+}
+
+async function getMcpImageThumbnailBase64(url, projectId, filename) {
+  const cachePath = getMcpThumbnailPath(projectId, filename);
+
+  if (isMcpThumbnailCacheValid(cachePath)) {
+    const cached = await fs.promises.readFile(cachePath);
+    return cached.toString("base64");
+  }
+
+  let imageBuffer = null;
+  let outputBuffer = null;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const arrayBuffer = await response.arrayBuffer();
+    imageBuffer = Buffer.from(arrayBuffer);
+
+    outputBuffer = await sharp(imageBuffer)
+      .resize(1024, 1024, { fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 75 })
+      .toBuffer();
+
+    imageBuffer = null;
+
+    await fs.promises.writeFile(cachePath, outputBuffer);
+    const base64 = outputBuffer.toString("base64");
+    outputBuffer = null;
+    return base64;
+  } catch (error) {
+    console.error(`Error generating MCP thumbnail for ${url}:`, error.message);
+    return null;
+  } finally {
+    imageBuffer = null;
+    outputBuffer = null;
+    if (global.gc) global.gc();
+  }
+}
+
 // ----- MCP server (Streamable HTTP) -----
 
 // Ensure projects are available, fetching fresh if no cache exists
@@ -2040,12 +2127,20 @@ function createMcpServer() {
     {
       title: "Get project",
       description:
-        "Get the full details of a single project by id, including the full media list (images, videos, notes).",
+        "Get the full details of a single project by id, including the full media list (images, videos, notes). Set include_image_data: true to also return inline 1024px JPEG thumbnails of every image in media[] as MCP image content blocks (in media[] order).",
       inputSchema: {
-        id: z.string().describe("The project id (folder name in portfolio storage).")
+        id: z
+          .string()
+          .describe("The project id (folder name in portfolio storage)."),
+        include_image_data: z
+          .boolean()
+          .optional()
+          .describe(
+            "If true, attach base64 JPEG thumbnails (1024px longest side, q75) of every image in media[] as image content blocks, in the same order they appear in media[]. Off by default because it's token-heavy."
+          )
       }
     },
-    async ({ id }) => {
+    async ({ id, include_image_data }) => {
       const projects = await ensureProjects();
       const project = projects.find((p) => p.id === id);
       updateCacheInBackground();
@@ -2055,7 +2150,37 @@ function createMcpServer() {
           content: [{ type: "text", text: `Project "${id}" not found.` }]
         };
       }
-      return jsonResult(project);
+
+      const content = [
+        { type: "text", text: JSON.stringify(project, null, 2) }
+      ];
+
+      if (include_image_data && Array.isArray(project.media)) {
+        const imageMedia = project.media.filter((m) => m.type === "image");
+        for (
+          let i = 0;
+          i < imageMedia.length;
+          i += MAX_IMAGE_BUFFERS_IN_MEMORY
+        ) {
+          const batch = imageMedia.slice(i, i + MAX_IMAGE_BUFFERS_IN_MEMORY);
+          const results = await Promise.all(
+            batch.map((m) =>
+              getMcpImageThumbnailBase64(m.url, project.id, m.filename)
+            )
+          );
+          for (const data of results) {
+            if (data) {
+              content.push({
+                type: "image",
+                data,
+                mimeType: "image/jpeg"
+              });
+            }
+          }
+        }
+      }
+
+      return { content };
     }
   );
 
