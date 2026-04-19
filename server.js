@@ -2127,20 +2127,14 @@ function createMcpServer() {
     {
       title: "Get project",
       description:
-        "Get the full details of a single project by id, including the full media list (images, videos, notes). Set include_image_data: true to also return inline 1024px JPEG thumbnails of every image in media[] as MCP image content blocks (in media[] order).",
+        "Get the full details of a single project by id, including the full media list (images, videos, notes). Also returns inline 1024px JPEG thumbnails of every image in media[] as MCP image content blocks, in the same order they appear in media[].",
       inputSchema: {
         id: z
           .string()
-          .describe("The project id (folder name in portfolio storage)."),
-        include_image_data: z
-          .boolean()
-          .optional()
-          .describe(
-            "If true, attach base64 JPEG thumbnails (1024px longest side, q75) of every image in media[] as image content blocks, in the same order they appear in media[]. Off by default because it's token-heavy."
-          )
+          .describe("The project id (folder name in portfolio storage).")
       }
     },
-    async ({ id, include_image_data }) => {
+    async ({ id }) => {
       const projects = await ensureProjects();
       const project = projects.find((p) => p.id === id);
       updateCacheInBackground();
@@ -2155,7 +2149,7 @@ function createMcpServer() {
         { type: "text", text: JSON.stringify(project, null, 2) }
       ];
 
-      if (include_image_data && Array.isArray(project.media)) {
+      if (Array.isArray(project.media)) {
         const imageMedia = project.media.filter((m) => m.type === "image");
         for (
           let i = 0;
