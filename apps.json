@@ -61,5 +61,19 @@
     "description": "Create visual artifacts",
     "url": "https://mosaic.fcc.lol",
     "iconUrl": null
+  },
+  {
+    "id": "nearby",
+    "name": "Nearby",
+    "description": "Find coffee shops nearby",
+    "url": "https://nearby.land/",
+    "iconUrl": "https://nearby.land/cup192.png"
+  },
+  {
+    "id": "puzzles",
+    "name": "Puzzles",
+    "description": "Solve daily puzzles",
+    "url": "https://puzzles.noshado.ws/",
+    "iconUrl": "https://puzzles.noshado.ws/icons/apple-touch-icon.png"
   }
 ]
