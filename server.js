@@ -359,7 +359,8 @@ async function fetchProjectsFromRemote() {
       folderName &&
       folderName !== ".." &&
       folderName !== "." &&
-      folderName !== "_template"
+      folderName !== "_template" &&
+      folderName !== "_archive"
     ) {
       projectFolders.push(folderName);
     }
@@ -567,13 +568,26 @@ function saveCacheToFile(projects) {
     }
 
     // Save each project as an individual file
+    const currentIds = new Set(projects.map((p) => p.id));
     projects.forEach((project) => {
       const projectFile = path.join(PROJECTS_DIR, `${project.id}.json`);
       fs.writeFileSync(projectFile, JSON.stringify(project, null, 2));
     });
 
+    // Remove individual files for projects no longer present
+    const existingFiles = fs.readdirSync(PROJECTS_DIR);
+    let removed = 0;
+    for (const file of existingFiles) {
+      if (!file.endsWith(".json")) continue;
+      const id = file.slice(0, -".json".length);
+      if (!currentIds.has(id)) {
+        fs.unlinkSync(path.join(PROJECTS_DIR, file));
+        removed++;
+      }
+    }
+
     console.log(
-      `Projects cache saved: ${projects.length} projects (+ individual files)`
+      `Projects cache saved: ${projects.length} projects (+ individual files, ${removed} stale removed)`
     );
   } catch (error) {
     console.error("Error saving cache to file:", error);
