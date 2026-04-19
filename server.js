@@ -2077,7 +2077,7 @@ function summarizeProject(project) {
     tags: project.tags || [],
     credits: project.credits || [],
     primaryImage: project.primaryImage?.url || null,
-    url: `${BASE_URL}/${project.id}`
+    url: `${BASE_URL}/project/${project.id}`
   };
 }
 
