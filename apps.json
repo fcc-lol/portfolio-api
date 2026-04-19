@@ -78,8 +78,8 @@
   },
   {
     "id": "nyc-food",
-    "name": "NYC Restaurant Ratings",
-    "description": "Search NYC restaurant health inspection grades",
+    "name": "Restaurant Ratings",
+    "description": "View NYC health scores",
     "url": "https://nycfood.leo.gd/",
     "iconUrl": null
   }
