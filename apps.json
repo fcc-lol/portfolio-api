@@ -64,7 +64,7 @@
   },
   {
     "id": "nearby",
-    "name": "Nearby",
+    "name": "Coffee Compass",
     "description": "Find coffee shops nearby",
     "url": "https://nearby.land/",
     "iconUrl": "https://nearby.land/cup192.png"
@@ -72,7 +72,7 @@
   {
     "id": "puzzles",
     "name": "Puzzles",
-    "description": "Solve daily puzzles",
+    "description": "Play brainteaser games",
     "url": "https://puzzles.noshado.ws/",
     "iconUrl": "https://puzzles.noshado.ws/icons/apple-touch-icon.png"
   }
