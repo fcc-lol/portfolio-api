@@ -60,7 +60,7 @@
     "name": "Mosaic",
     "description": "Create visual artifacts",
     "url": "https://mosaic.fcc.lol",
-    "iconUrl": null
+    "iconUrl": "https://mosaic.fcc.lol/apple-touch-icon.png"
   },
   {
     "id": "nearby",
