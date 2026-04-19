@@ -81,6 +81,6 @@
     "name": "Restaurant Ratings",
     "description": "View NYC health scores",
     "url": "https://nycfood.leo.gd/",
-    "iconUrl": null
+    "iconUrl": "https://nycfood.leo.gd/apple-touch-icon.png"
   }
 ]
