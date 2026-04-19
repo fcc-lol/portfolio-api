@@ -1351,6 +1351,9 @@ app.get("/apps/share-image", async (req, res) => {
     const roundedMask = Buffer.from(
       `<svg xmlns="http://www.w3.org/2000/svg" width="${iconSize}" height="${iconSize}"><rect x="0" y="0" width="${iconSize}" height="${iconSize}" rx="${borderRadius}" ry="${borderRadius}" fill="white"/></svg>`
     );
+    const borderOverlay = Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${iconSize}" height="${iconSize}"><rect x="1" y="1" width="${iconSize - 2}" height="${iconSize - 2}" rx="${borderRadius - 1}" ry="${borderRadius - 1}" fill="none" stroke="rgba(0,0,0,0.05)" stroke-width="2"/></svg>`
+    );
 
     async function processIcon(iconUrl) {
       try {
@@ -1361,7 +1364,10 @@ app.get("/apps/share-image", async (req, res) => {
 
         return await sharp(buffer)
           .resize(iconSize, iconSize, { fit: "cover", position: "center" })
-          .composite([{ input: roundedMask, blend: "dest-in" }])
+          .composite([
+            { input: roundedMask, blend: "dest-in" },
+            { input: borderOverlay, blend: "over" }
+          ])
           .png()
           .toBuffer();
       } catch (error) {
