@@ -672,6 +672,8 @@ function getShareImageCachePath(type, identifier = null) {
     return path.join(SHARE_IMAGE_CACHE_DIR, `person-${identifier}.jpg`);
   } else if (type === "space") {
     return path.join(SHARE_IMAGE_CACHE_DIR, "space.jpg");
+  } else if (type === "apps") {
+    return path.join(SHARE_IMAGE_CACHE_DIR, "apps.jpg");
   }
   return null;
 }
@@ -1271,6 +1273,157 @@ app.get("/about/prerender", async (req, res) => {
   } catch (error) {
     console.error("Error prerendering about page:", error);
     res.status(500).send("Internal server error");
+  }
+});
+
+// Apps page prerender route for social media crawlers
+app.get("/apps/prerender", async (req, res) => {
+  try {
+    const title = "FCC Studio – Apps";
+    const description = "A directory of apps from FCC Studio and friends.";
+    const shareImageUrl = `${API_URL}/apps/share-image`;
+    const appsUrl = `${BASE_URL}/apps`;
+
+    const html = generateHtml(
+      title,
+      description,
+      shareImageUrl,
+      appsUrl,
+      "/apps"
+    );
+
+    res.set("Content-Type", "text/html");
+    res.send(html);
+  } catch (error) {
+    console.error("Error prerendering apps page:", error);
+    res.status(500).send("Internal server error");
+  }
+});
+
+// Apps page share image endpoint - grid of top 6 app icons
+app.get("/apps/share-image", async (req, res) => {
+  try {
+    const cachePath = getShareImageCachePath("apps");
+
+    // Cache valid if it exists and is newer than apps.json
+    let cacheValid = false;
+    try {
+      if (fs.existsSync(cachePath) && fs.existsSync(APPS_FILE)) {
+        const cacheMtime = fs.statSync(cachePath).mtime.getTime();
+        const appsMtime = fs.statSync(APPS_FILE).mtime.getTime();
+        cacheValid = cacheMtime > appsMtime;
+      }
+    } catch {
+      cacheValid = false;
+    }
+
+    if (cacheValid) {
+      console.log("Serving cached apps share image from file");
+      res.set({
+        "Content-Type": "image/jpeg",
+        "Cache-Control": "public, max-age=3600",
+        "Content-Disposition": `inline; filename="apps-share.jpg"`
+      });
+      fs.createReadStream(cachePath).pipe(res);
+      return;
+    }
+
+    const apps = JSON.parse(fs.readFileSync(APPS_FILE, "utf8"));
+    const topApps = apps.filter((a) => a.iconUrl).slice(0, 6);
+
+    if (topApps.length === 0) {
+      return res.status(400).json({ error: "No app icons available" });
+    }
+
+    console.log("Generating new apps share image");
+
+    const canvasWidth = 1200;
+    const canvasHeight = 630;
+    const iconSize = 200;
+    const cols = 3;
+    const rows = 2;
+    const totalIconWidth = cols * iconSize;
+    const totalIconHeight = rows * iconSize;
+    const gapX = (canvasWidth - totalIconWidth) / (cols + 1);
+    const gapY = (canvasHeight - totalIconHeight) / (rows + 1);
+    const borderRadius = Math.round(iconSize * 0.225);
+
+    const roundedMask = Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${iconSize}" height="${iconSize}"><rect x="0" y="0" width="${iconSize}" height="${iconSize}" rx="${borderRadius}" ry="${borderRadius}" fill="white"/></svg>`
+    );
+
+    async function processIcon(iconUrl) {
+      try {
+        const response = await fetch(iconUrl);
+        if (!response.ok) return null;
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        return await sharp(buffer)
+          .resize(iconSize, iconSize, { fit: "cover", position: "center" })
+          .composite([{ input: roundedMask, blend: "dest-in" }])
+          .png()
+          .toBuffer();
+      } catch (error) {
+        console.warn(`Failed to process icon ${iconUrl}:`, error.message);
+        return null;
+      }
+    }
+
+    const processedIcons = [];
+    for (
+      let i = 0;
+      i < topApps.length;
+      i += MAX_IMAGE_BUFFERS_IN_MEMORY
+    ) {
+      const batch = topApps.slice(i, i + MAX_IMAGE_BUFFERS_IN_MEMORY);
+      const results = await Promise.all(
+        batch.map((app) => processIcon(app.iconUrl))
+      );
+      results.forEach((img, idx) => {
+        if (img) processedIcons.push({ buffer: img, index: i + idx });
+      });
+    }
+
+    if (processedIcons.length === 0) {
+      return res.status(400).json({ error: "No icons could be loaded" });
+    }
+
+    const compositeInputs = processedIcons.map(({ buffer, index }) => {
+      const col = index % cols;
+      const row = Math.floor(index / cols);
+      return {
+        input: buffer,
+        left: Math.round(gapX + col * (iconSize + gapX)),
+        top: Math.round(gapY + row * (iconSize + gapY))
+      };
+    });
+
+    const composite = sharp({
+      create: {
+        width: canvasWidth,
+        height: canvasHeight,
+        channels: 3,
+        background: { r: 255, g: 255, b: 255 }
+      }
+    }).composite(compositeInputs);
+
+    await composite.jpeg({ quality: 85 }).toFile(cachePath);
+    console.log(`Apps share image generated and saved to: ${cachePath}`);
+
+    if (global.gc) global.gc();
+
+    res.set({
+      "Content-Type": "image/jpeg",
+      "Cache-Control": "public, max-age=3600",
+      "Content-Disposition": `inline; filename="apps-share.jpg"`
+    });
+    fs.createReadStream(cachePath).pipe(res);
+  } catch (error) {
+    console.error("Error generating apps share image:", error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Internal server error" });
+    }
   }
 });
 
