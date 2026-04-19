@@ -75,5 +75,12 @@
     "description": "Play brainteaser games",
     "url": "https://puzzles.noshado.ws/",
     "iconUrl": "https://puzzles.noshado.ws/icons/apple-touch-icon.png"
+  },
+  {
+    "id": "nyc-food",
+    "name": "NYC Restaurant Ratings",
+    "description": "Search NYC restaurant health inspection grades",
+    "url": "https://nycfood.leo.gd/",
+    "iconUrl": null
   }
 ]
