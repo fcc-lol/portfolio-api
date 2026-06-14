@@ -79,6 +79,13 @@ let projectsCache = null;
 let lastCacheUpdate = null;
 let isUpdatingCache = false;
 
+// Persistent cache of media dimensions, keyed by media URL. Dimensions are
+// expensive to fetch (ffprobe / image download per file) and never change for
+// a given URL, so we probe each URL once and reuse the result across rebuilds.
+const DIMENSIONS_CACHE_FILE = "dimensions-cache.json";
+let dimensionsCache = {};
+let dimensionsCacheDirty = false;
+
 // File-based cache directory for share images (no in-memory caching)
 const SHARE_IMAGE_CACHE_DIR = "share-images";
 
@@ -131,8 +138,69 @@ function checkMemoryPressure() {
   return false;
 }
 
+// Load the persistent dimensions cache from disk on startup
+function loadDimensionsCache() {
+  try {
+    if (fs.existsSync(DIMENSIONS_CACHE_FILE)) {
+      const data = JSON.parse(fs.readFileSync(DIMENSIONS_CACHE_FILE, "utf8"));
+      dimensionsCache = data && typeof data === "object" ? data : {};
+      console.log(
+        `Loaded ${Object.keys(dimensionsCache).length} cached media dimensions`
+      );
+      return true;
+    }
+  } catch (error) {
+    console.error("Error loading dimensions cache:", error);
+    dimensionsCache = {};
+  }
+  return false;
+}
+
+// Persist the dimensions cache to disk, pruning entries for URLs that are no
+// longer referenced by any project so the file does not grow unbounded.
+function saveDimensionsCache(activeUrls = null) {
+  try {
+    if (activeUrls) {
+      for (const url of Object.keys(dimensionsCache)) {
+        if (!activeUrls.has(url)) {
+          delete dimensionsCache[url];
+        }
+      }
+    }
+    fs.writeFileSync(
+      DIMENSIONS_CACHE_FILE,
+      JSON.stringify(dimensionsCache, null, 2)
+    );
+    dimensionsCacheDirty = false;
+  } catch (error) {
+    console.error("Error saving dimensions cache:", error);
+  }
+}
+
+// Collect every media URL referenced by a set of projects (used to prune the
+// dimensions cache of entries for files that no longer exist)
+function collectMediaUrls(projects) {
+  const urls = new Set();
+  for (const project of projects) {
+    if (Array.isArray(project.media)) {
+      for (const item of project.media) {
+        if (item && item.url) urls.add(item.url);
+      }
+    }
+    if (project.primaryImage && project.primaryImage.url) {
+      urls.add(project.primaryImage.url);
+    }
+  }
+  return urls;
+}
+
 // Function to get image dimensions from URL
 async function getImageDimensions(url) {
+  // Return cached dimensions if we have already probed this URL
+  if (dimensionsCache[url]) {
+    return dimensionsCache[url];
+  }
+
   try {
     const response = await fetch(url);
     if (!response.ok) {
@@ -143,10 +211,13 @@ async function getImageDimensions(url) {
     const buffer = Buffer.from(arrayBuffer);
     const dimensions = imageSize(buffer);
 
-    return {
+    const result = {
       width: dimensions.width,
       height: dimensions.height
     };
+    dimensionsCache[url] = result;
+    dimensionsCacheDirty = true;
+    return result;
   } catch (error) {
     console.warn(`Could not get dimensions for ${url}:`, error.message);
     return null;
@@ -288,6 +359,11 @@ function generatePersonPageHtml(personName, projectCount) {
 
 // Function to get video dimensions from URL
 async function getVideoDimensions(url) {
+  // Return cached dimensions if we have already probed this URL
+  if (dimensionsCache[url]) {
+    return dimensionsCache[url];
+  }
+
   try {
     const { stdout } = await execFileAsync(
       "ffprobe",
@@ -310,10 +386,13 @@ async function getVideoDimensions(url) {
     );
 
     if (videoStream && videoStream.width && videoStream.height) {
-      return {
+      const result = {
         width: videoStream.width,
         height: videoStream.height
       };
+      dimensionsCache[url] = result;
+      dimensionsCacheDirty = true;
+      return result;
     } else {
       throw new Error("No video stream found or dimensions not available");
     }
@@ -822,6 +901,11 @@ async function updateCacheInBackground() {
     // Save to files (creates both projects-cache.json and projects.json)
     saveCacheToFile(newProjects);
 
+    // Persist freshly probed dimensions, pruning URLs no longer in use
+    if (dimensionsCacheDirty) {
+      saveDimensionsCache(collectMediaUrls(newProjects));
+    }
+
     // Clear share image cache since projects data has changed
     clearShareImageCache();
     clearMcpThumbnailCache();
@@ -1066,6 +1150,11 @@ app.get("/admin/refresh-cache", authenticateAdmin, async (req, res) => {
     const newProjects = await fetchProjectsFromRemote();
     lastCacheUpdate = Date.now();
     saveCacheToFile(newProjects);
+
+    // Persist freshly probed dimensions, pruning URLs no longer in use
+    if (dimensionsCacheDirty) {
+      saveDimensionsCache(collectMediaUrls(newProjects));
+    }
 
     // Clear share image cache since projects data has changed
     clearShareImageCache();
@@ -2462,6 +2551,7 @@ app.delete("/mcp", mcpMethodNotAllowed);
 
 // Load cache metadata on startup (not full data)
 loadCacheMetadata();
+loadDimensionsCache();
 
 app.listen(port, () => {
   console.log(`Server is running at http://localhost:${port}`);
