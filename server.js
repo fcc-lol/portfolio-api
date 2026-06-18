@@ -2389,12 +2389,97 @@ function createMcpServer() {
       }
     },
     async ({ tag, person } = {}) => {
-      let projects = await ensureProjects();
+      const all = await ensureProjects();
+      let projects = all;
       if (tag) projects = filterProjectsByTag(projects, tag);
       if (person) projects = filterProjectsByPerson(projects, person);
-      const sorted = sortProjectsByDate(projects);
       updateCacheInBackground();
-      return jsonResult(sorted.map(summarizeProject));
+
+      // When a filter matches nothing, return a hint instead of a bare [] so
+      // callers (e.g. LLMs) can self-correct — the most common mistake is
+      // passing a project *name* as a tag, which never matches.
+      if (projects.length === 0 && (tag || person)) {
+        return jsonResult({
+          results: [],
+          message:
+            "No projects matched. `tag` and `person` are exact filters, not a " +
+            "name search. To find a project by name or keyword, use " +
+            "search_projects instead.",
+          ...(tag ? { availableTags: getAllTags(all) } : {})
+        });
+      }
+
+      return jsonResult(sortProjectsByDate(projects).map(summarizeProject));
+    }
+  );
+
+  server.registerTool(
+    "search_projects",
+    {
+      title: "Search projects",
+      description:
+        "Search FCC Studio projects by free-text terms, tags, and/or year. Query syntax (space-separated): plain words match the title, description, tags, and credited people; #tag filters by an exact tag (all #tags required); a year like 2025 or a range like 2023-2025 filters by date. Empty query returns every project, newest first. Use this (not list_projects) to find a project by name.",
+      inputSchema: {
+        query: z
+          .string()
+          .optional()
+          .default("")
+          .describe(
+            'Search query, e.g. "cyberdeck" or "robot #hardware 2024-2025". Empty string returns all projects.'
+          )
+      }
+    },
+    async ({ query = "" } = {}) => {
+      let projects = await ensureProjects();
+
+      const tags = [];
+      const words = [];
+      let yearFrom = null;
+      let yearTo = null;
+
+      for (const tok of query.trim().split(/\s+/).filter(Boolean)) {
+        if (tok.startsWith("#") && tok.length > 1) {
+          tags.push(tok.slice(1));
+        } else if (/^\d{4}$/.test(tok)) {
+          yearFrom = yearTo = Number(tok);
+        } else if (/^\d{4}-\d{4}$/.test(tok)) {
+          const [a, b] = tok.split("-").map(Number);
+          yearFrom = Math.min(a, b);
+          yearTo = Math.max(a, b);
+        } else {
+          words.push(tok.toLowerCase());
+        }
+      }
+
+      for (const tag of tags) {
+        projects = filterProjectsByTag(projects, tag);
+      }
+
+      if (yearFrom !== null) {
+        projects = projects.filter((project) => {
+          const year = Number(String(project.date || "").slice(0, 4));
+          return year >= yearFrom && year <= yearTo;
+        });
+      }
+
+      if (words.length) {
+        projects = projects.filter((project) => {
+          const haystack = [
+            project.title,
+            project.name,
+            project.description,
+            ...(project.tags || []),
+            ...(project.credits || []).map((credit) => credit?.name || credit)
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          return words.every((word) => haystack.includes(word));
+        });
+      }
+
+      updateCacheInBackground();
+      return jsonResult(sortProjectsByDate(projects).map(summarizeProject));
     }
   );
 
