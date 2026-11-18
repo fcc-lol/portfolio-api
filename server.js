@@ -92,6 +92,12 @@ const SHARE_IMAGE_CACHE_DIR = "share-images";
 // File-based cache directory for MCP media thumbnails (1024px/q75 JPEG)
 const MCP_THUMBNAIL_CACHE_DIR = "mcp-thumbnails";
 
+// File-based cache directory for project card thumbnails (served to the
+// portfolio grid so it doesn't have to download full-size originals)
+const CARD_THUMBNAIL_CACHE_DIR = "card-thumbnails";
+const CARD_THUMBNAIL_SIZE = 1200; // longest edge, px
+const CARD_THUMBNAIL_MAX_AGE = 30 * 24 * 60 * 60; // seconds
+
 // Memory monitoring functions
 function getMemoryUsage() {
   const memUsage = process.memoryUsage();
@@ -574,6 +580,7 @@ async function fetchProjectsFromRemote() {
 
               primaryImage = {
                 url: primaryImageUrl,
+                thumbnailUrl: `https://portfolio-api.fcc.lol/thumbnails/${projectName}/${firstImageFilename}`,
                 filename: firstImageFilename,
                 dimensions: primaryImageDimensions
               };
@@ -2249,6 +2256,71 @@ app.get("/space/share-image", async (req, res) => {
     console.error("Error generating space share image:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Internal server error" });
+    }
+  }
+});
+
+// ----- Project card thumbnails -----
+
+// Serve a downscaled JPEG of a project's primary image for the grid cards.
+// Only a project's current primary image can be requested, so this can't be
+// used to fetch arbitrary URLs. Filenames change when images change, so the
+// result is cached on disk and by browsers/CDN for a long time.
+app.get("/thumbnails/:projectId/:filename", async (req, res) => {
+  try {
+    const { projectId, filename } = req.params;
+    const projects = getProjects() || getProjectsFromFile() || [];
+    const project = projects.find((p) => p.id === projectId);
+    const primary = project?.primaryImage;
+
+    // Stored filenames are URL-encoded (e.g. "1@2x%20Large.jpeg"); Express
+    // hands us the decoded form, so compare decoded to decoded.
+    let primaryFilename = primary?.filename;
+    try {
+      primaryFilename = decodeURIComponent(primaryFilename);
+    } catch {
+      // keep the raw filename if it isn't valid percent-encoding
+    }
+
+    if (!primary?.url || primaryFilename !== filename) {
+      return res.status(404).json({ error: "Thumbnail not found" });
+    }
+
+    if (!fs.existsSync(CARD_THUMBNAIL_CACHE_DIR)) {
+      fs.mkdirSync(CARD_THUMBNAIL_CACHE_DIR, { recursive: true });
+    }
+    const safe = (s) => s.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const cachePath = path.join(
+      CARD_THUMBNAIL_CACHE_DIR,
+      `${safe(projectId)}__${safe(filename)}.jpg`
+    );
+
+    if (!fs.existsSync(cachePath)) {
+      const response = await fetch(primary.url);
+      if (!response.ok) {
+        return res.status(502).json({ error: "Failed to fetch source image" });
+      }
+      const output = await sharp(Buffer.from(await response.arrayBuffer()))
+        .rotate()
+        .resize(CARD_THUMBNAIL_SIZE, CARD_THUMBNAIL_SIZE, {
+          fit: "inside",
+          withoutEnlargement: true
+        })
+        .flatten({ background: "#ffffff" })
+        .jpeg({ quality: 76, mozjpeg: true })
+        .toBuffer();
+      const tmpPath = `${cachePath}.${process.pid}.tmp`;
+      await fs.promises.writeFile(tmpPath, output);
+      await fs.promises.rename(tmpPath, cachePath);
+    }
+
+    res.set("Content-Type", "image/jpeg");
+    res.set("Cache-Control", `public, max-age=${CARD_THUMBNAIL_MAX_AGE}`);
+    res.sendFile(path.resolve(cachePath));
+  } catch (error) {
+    console.error("Error serving card thumbnail:", error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to generate thumbnail" });
     }
   }
 });
