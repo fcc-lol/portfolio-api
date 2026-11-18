@@ -201,20 +201,25 @@ function collectMediaUrls(projects) {
 }
 
 // Function to get image dimensions from URL
-async function getImageDimensions(url) {
+async function getImageDimensions(url, localPath = null) {
   // Return cached dimensions if we have already probed this URL
   if (dimensionsCache[url]) {
     return dimensionsCache[url];
   }
 
   try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image: ${response.status}`);
-    }
+    let buffer;
+    if (localPath) {
+      buffer = await fs.promises.readFile(localPath);
+    } else {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch image: ${response.status}`);
+      }
 
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+      const arrayBuffer = await response.arrayBuffer();
+      buffer = Buffer.from(arrayBuffer);
+    }
     const dimensions = imageSize(buffer);
 
     const result = {
@@ -364,7 +369,7 @@ function generatePersonPageHtml(personName, projectCount) {
 }
 
 // Function to get video dimensions from URL
-async function getVideoDimensions(url) {
+async function getVideoDimensions(url, localPath = null) {
   // Return cached dimensions if we have already probed this URL
   if (dimensionsCache[url]) {
     return dimensionsCache[url];
@@ -373,7 +378,14 @@ async function getVideoDimensions(url) {
   try {
     const { stdout } = await execFileAsync(
       "ffprobe",
-      ["-v", "quiet", "-print_format", "json", "-show_streams", url],
+      [
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_streams",
+        localPath || url
+      ],
       {
         timeout: 30000 // 30 second timeout
       }
@@ -427,10 +439,51 @@ function sortProjectsByDate(projects) {
   });
 }
 
-// Function to fetch projects from remote storage
-async function fetchProjectsFromRemote() {
-  const baseUrl = "https://static.fcc.lol/portfolio-storage";
-  const projects = [];
+// The portfolio storage is served from this same machine, so read it straight
+// from disk when it is there (milliseconds) instead of making ~70 sequential
+// HTTPS round trips through the CDN (~18s). Falls back to HTTP anywhere the
+// directory doesn't exist, e.g. local development.
+const LOCAL_STORAGE_DIR =
+  process.env.PORTFOLIO_STORAGE_DIR || "/home/fcc/static/portfolio-storage";
+
+function hasLocalStorage() {
+  try {
+    return fs.statSync(LOCAL_STORAGE_DIR).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+// Encode a filename the way the web server's directory listing does, so URLs
+// and filenames stay identical whichever way the storage is read.
+function encodeStorageFilename(name) {
+  return encodeURIComponent(name).replace(/%[0-9A-F]{2}/g, (escape) =>
+    // The listing leaves these characters as-is and writes hex in lowercase
+    ["%24", "%26", "%2B", "%2C", "%3A", "%3D", "%40"].includes(escape)
+      ? String.fromCharCode(parseInt(escape.slice(1), 16))
+      : escape.toLowerCase()
+  );
+}
+
+// List the project folder names in storage
+async function listProjectFolders(baseUrl, useLocal) {
+  const isProjectFolder = (name) =>
+    name &&
+    !name.startsWith(".") &&
+    name !== "_template" &&
+    name !== "_archive";
+
+  if (useLocal) {
+    const entries = await fs.promises.readdir(LOCAL_STORAGE_DIR, {
+      withFileTypes: true
+    });
+    return entries
+      .filter((entry) => entry.isDirectory() && isProjectFolder(entry.name))
+      .map((entry) => entry.name)
+      // Same order as the web listing, which compares names with their
+      // trailing slash ("play-machine-mini/" before "play-machine/")
+      .sort((a, b) => (`${a}/` < `${b}/` ? -1 : `${a}/` > `${b}/` ? 1 : 0));
+  }
 
   // Fetch the directory index from the remote URL
   const response = await fetch(`${baseUrl}/`);
@@ -448,45 +501,110 @@ async function fetchProjectsFromRemote() {
 
   while ((match = linkRegex.exec(html)) !== null) {
     const folderName = match[1].replace("/", ""); // Remove trailing slash
-    if (
-      folderName &&
-      folderName !== ".." &&
-      folderName !== "." &&
-      folderName !== "_template" &&
-      folderName !== "_archive"
-    ) {
+    if (isProjectFolder(folderName)) {
       projectFolders.push(folderName);
     }
   }
+  return projectFolders;
+}
+
+// Read a project's manifest.json, or null if it has none
+async function readProjectManifest(baseUrl, projectName, useLocal) {
+  if (useLocal) {
+    try {
+      const raw = await fs.promises.readFile(
+        path.join(LOCAL_STORAGE_DIR, projectName, "manifest.json"),
+        "utf8"
+      );
+      return JSON.parse(raw);
+    } catch (error) {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  const manifestResponse = await fetch(
+    `${baseUrl}/${projectName}/manifest.json`
+  );
+  return manifestResponse.ok ? await manifestResponse.json() : null;
+}
+
+// List the (URL-encoded) filenames in a project's media folder, or null if
+// the folder can't be read
+async function listProjectMedia(baseUrl, projectName, useLocal) {
+  if (useLocal) {
+    try {
+      const entries = await fs.promises.readdir(
+        path.join(LOCAL_STORAGE_DIR, projectName, "media"),
+        { withFileTypes: true }
+      );
+      return entries
+        .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
+        .map((entry) => encodeStorageFilename(entry.name));
+    } catch (error) {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  const mediaResponse = await fetch(`${baseUrl}/${projectName}/media/`);
+  if (!mediaResponse.ok) return null;
+  const mediaHtml = await mediaResponse.text();
+  const mediaFileRegex = /<a href="([^"]+)">/g;
+  const filenames = [];
+  let mediaMatch;
+  while ((mediaMatch = mediaFileRegex.exec(mediaHtml)) !== null) {
+    filenames.push(mediaMatch[1]);
+  }
+  return filenames;
+}
+
+// Path on disk for a media file, or null when storage isn't local
+function localMediaPath(projectName, encodedFilename, useLocal) {
+  if (!useLocal) return null;
+  let filename = encodedFilename;
+  try {
+    filename = decodeURIComponent(encodedFilename);
+  } catch {
+    // keep the raw name if it isn't valid percent-encoding
+  }
+  return path.join(LOCAL_STORAGE_DIR, projectName, "media", filename);
+}
+
+// Function to fetch projects from storage
+async function fetchProjectsFromRemote() {
+  const baseUrl = "https://static.fcc.lol/portfolio-storage";
+  const projects = [];
+  const useLocal = hasLocalStorage();
+
+  const projectFolders = await listProjectFolders(baseUrl, useLocal);
 
   // For each project folder, fetch the manifest.json
   for (const projectName of projectFolders) {
     try {
-      const manifestUrl = `${baseUrl}/${projectName}/manifest.json`;
-      const manifestResponse = await fetch(manifestUrl);
+      const manifest = await readProjectManifest(
+        baseUrl,
+        projectName,
+        useLocal
+      );
 
-      if (manifestResponse.ok) {
-        const manifest = await manifestResponse.json();
-
-        // Fetch media files from the media folder
-        const mediaUrl = `${baseUrl}/${projectName}/media/`;
+      if (manifest) {
+        // List media files from the media folder
         let media = [];
         let primaryImage = null; // Initialize primaryImage
 
         try {
-          const mediaResponse = await fetch(mediaUrl);
-          if (mediaResponse.ok) {
-            const mediaHtml = await mediaResponse.text();
-
-            // Parse media files from the HTML
-            const mediaFileRegex = /<a href="([^"]+)">/g;
+          const mediaFilenames = await listProjectMedia(
+            baseUrl,
+            projectName,
+            useLocal
+          );
+          if (mediaFilenames) {
             const mediaFiles = [];
             const imageFiles = [];
             const videoFiles = [];
-            let mediaMatch;
 
-            while ((mediaMatch = mediaFileRegex.exec(mediaHtml)) !== null) {
-              const filename = mediaMatch[1];
+            for (const filename of mediaFilenames) {
               // Only include common media file extensions
               const ext = path.extname(filename).toLowerCase();
               if (
@@ -524,7 +642,10 @@ async function fetchProjectsFromRemote() {
 
               if ([".jpg", ".jpeg", ".png", ".gif"].includes(ext)) {
                 // This is an image - get dimensions
-                const dimensions = await getImageDimensions(url);
+                const dimensions = await getImageDimensions(
+                  url,
+                  localMediaPath(projectName, filename, useLocal)
+                );
                 allMedia.push({
                   url,
                   type: "image",
@@ -533,7 +654,10 @@ async function fetchProjectsFromRemote() {
                 });
               } else if ([".mp4", ".mov", ".avi", ".webm"].includes(ext)) {
                 // This is a video - get dimensions
-                const dimensions = await getVideoDimensions(url);
+                const dimensions = await getVideoDimensions(
+                  url,
+                  localMediaPath(projectName, filename, useLocal)
+                );
                 allMedia.push({
                   url,
                   type: "video",
@@ -543,10 +667,17 @@ async function fetchProjectsFromRemote() {
               } else if (ext === ".md") {
                 // This is a Markdown file - fetch content and add as notes type
                 try {
-                  const mdResponse = await fetch(url);
                   let content = "";
-                  if (mdResponse.ok) {
-                    content = await mdResponse.text();
+                  if (useLocal) {
+                    content = await fs.promises.readFile(
+                      localMediaPath(projectName, filename, useLocal),
+                      "utf8"
+                    );
+                  } else {
+                    const mdResponse = await fetch(url);
+                    if (mdResponse.ok) {
+                      content = await mdResponse.text();
+                    }
                   }
                   allMedia.push({
                     url,
@@ -575,7 +706,8 @@ async function fetchProjectsFromRemote() {
               const firstImageFilename = imageFiles.sort()[0];
               const primaryImageUrl = `${baseUrl}/${projectName}/media/${firstImageFilename}`;
               const primaryImageDimensions = await getImageDimensions(
-                primaryImageUrl
+                primaryImageUrl,
+                localMediaPath(projectName, firstImageFilename, useLocal)
               );
 
               primaryImage = {
