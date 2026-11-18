@@ -402,9 +402,15 @@ async function getVideoDimensions(url) {
   }
 }
 
-// Function to sort projects by date, newest first
+// Function to sort projects: manifests with a numeric "order" come first
+// (lowest first), then everything else by date, newest first
 function sortProjectsByDate(projects) {
   return [...projects].sort((a, b) => {
+    const aPinned = Number.isFinite(a.order);
+    const bPinned = Number.isFinite(b.order);
+    if (aPinned && bPinned && a.order !== b.order) return a.order - b.order;
+    if (aPinned !== bPinned) return aPinned ? -1 : 1;
+
     // Handle cases where date might be null or undefined
     if (!a.date && !b.date) return 0;
     if (!a.date) return 1; // Projects without dates go to the end
