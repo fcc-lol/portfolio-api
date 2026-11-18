@@ -82,5 +82,19 @@
     "description": "View NYC health scores",
     "url": "https://nycfood.leo.gd/",
     "iconUrl": "https://nycfood.leo.gd/apple-touch-icon.png"
+  },
+  {
+    "id": "zap",
+    "name": "Zap",
+    "description": "Capture the moment",
+    "url": "https://zap.fcc.lol",
+    "iconUrl": "https://zap.fcc.lol/apple-touch-icon.png"
+  },
+  {
+    "id": "magic-camera",
+    "name": "Magic Camera",
+    "description": "Reimagine your world",
+    "url": "https://magic-camera.leo.gd",
+    "iconUrl": "https://magic-camera.leo.gd/apple-touch-icon.png"
   }
 ]
