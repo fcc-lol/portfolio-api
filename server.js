@@ -98,6 +98,11 @@ const CARD_THUMBNAIL_CACHE_DIR = "card-thumbnails";
 const CARD_THUMBNAIL_SIZE = 1200; // longest edge, px
 const CARD_THUMBNAIL_MAX_AGE = 30 * 24 * 60 * 60; // seconds
 
+// File-based cache directory for project page images (served to the project
+// pages in place of the multi-megabyte originals)
+const DISPLAY_IMAGE_CACHE_DIR = "display-images";
+const DISPLAY_IMAGE_SIZE = 1600; // longest edge, px
+
 // Memory monitoring functions
 function getMemoryUsage() {
   const memUsage = process.memoryUsage();
@@ -646,12 +651,17 @@ async function fetchProjectsFromRemote() {
                   url,
                   localMediaPath(projectName, filename, useLocal)
                 );
-                allMedia.push({
+                const image = {
                   url,
                   type: "image",
                   filename,
                   dimensions
-                });
+                };
+                // Animated GIFs are served as-is
+                if (ext !== ".gif") {
+                  image.displayUrl = `https://portfolio-api.fcc.lol/display/${projectName}/${filename}`;
+                }
+                allMedia.push(image);
               } else if ([".mp4", ".mov", ".avi", ".webm"].includes(ext)) {
                 // This is a video - get dimensions
                 const dimensions = await getVideoDimensions(
@@ -703,7 +713,17 @@ async function fetchProjectsFromRemote() {
 
             // Get the first image as primary image with dimensions
             if (imageFiles.length > 0) {
-              const firstImageFilename = imageFiles.sort()[0];
+              // The first image alphabetically is the cover, unless the
+              // manifest names another one with "cover": "<filename>"
+              const coverFilename =
+                typeof manifest.cover === "string"
+                  ? imageFiles.find(
+                      (f) =>
+                        f === manifest.cover ||
+                        f === encodeStorageFilename(manifest.cover)
+                    )
+                  : null;
+              const firstImageFilename = coverFilename || imageFiles.sort()[0];
               const primaryImageUrl = `${baseUrl}/${projectName}/media/${firstImageFilename}`;
               const primaryImageDimensions = await getImageDimensions(
                 primaryImageUrl,
@@ -2453,6 +2473,80 @@ app.get("/thumbnails/:projectId/:filename", async (req, res) => {
     console.error("Error serving card thumbnail:", error);
     if (!res.headersSent) {
       res.status(500).json({ error: "Failed to generate thumbnail" });
+    }
+  }
+});
+
+// ----- Project page display images -----
+
+// Serve a downscaled WebP of any image in a project's media for the project
+// page. Only files listed in the project's media can be requested. Filenames
+// change when images change, so the result is cached on disk and by
+// browsers/CDN for a long time.
+app.get("/display/:projectId/:filename", async (req, res) => {
+  try {
+    const { projectId, filename } = req.params;
+    const projects = getProjects() || getProjectsFromFile() || [];
+    const project = projects.find((p) => p.id === projectId);
+
+    // Stored filenames are URL-encoded; Express hands us the decoded form,
+    // so compare decoded to decoded.
+    const decode = (name) => {
+      try {
+        return decodeURIComponent(name);
+      } catch {
+        return name;
+      }
+    };
+    const item = (project?.media || []).find(
+      (m) => m.displayUrl && decode(m.filename) === filename
+    );
+    if (!item) {
+      return res.status(404).json({ error: "Image not found" });
+    }
+
+    if (!fs.existsSync(DISPLAY_IMAGE_CACHE_DIR)) {
+      fs.mkdirSync(DISPLAY_IMAGE_CACHE_DIR, { recursive: true });
+    }
+    const safe = (s) => s.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const cachePath = path.join(
+      DISPLAY_IMAGE_CACHE_DIR,
+      `${safe(projectId)}__${safe(filename)}.webp`
+    );
+
+    if (!fs.existsSync(cachePath)) {
+      let input = localMediaPath(projectId, item.filename, hasLocalStorage());
+      if (!input) {
+        const response = await fetch(item.url);
+        if (!response.ok) {
+          return res
+            .status(502)
+            .json({ error: "Failed to fetch source image" });
+        }
+        input = Buffer.from(await response.arrayBuffer());
+      }
+      // WebP keeps transparency, so cut-out PNGs still sit on the page color
+      const output = await sharp(input)
+        .rotate()
+        .resize(DISPLAY_IMAGE_SIZE, DISPLAY_IMAGE_SIZE, {
+          fit: "inside",
+          withoutEnlargement: true
+        })
+        .webp({ quality: 80 })
+        .toBuffer();
+      // Unique temp name so simultaneous requests for one image can't collide
+      const tmpPath = `${cachePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+      await fs.promises.writeFile(tmpPath, output);
+      await fs.promises.rename(tmpPath, cachePath);
+    }
+
+    res.set("Content-Type", "image/webp");
+    res.set("Cache-Control", `public, max-age=${CARD_THUMBNAIL_MAX_AGE}`);
+    res.sendFile(path.resolve(cachePath));
+  } catch (error) {
+    console.error("Error serving display image:", error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to generate image" });
     }
   }
 });
